@@ -1,0 +1,11 @@
+# Create a copy of this file for purposes, and don't commit it to your repository.
+
+# =========REQUIRED FIELDS=========
+# Your secret bot token.
+bot_token: ENTER_BOT_TOKEN_HERE
+
+# Your discord server ID
+server_id: ENTER_SERVER_ID_HERE
+
+# The feedback channel ID
+feedback_channel_id: ENTER_FEEDBACK_CHANNEL_ID_HERE
