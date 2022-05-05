@@ -1,13 +1,17 @@
 [tool.poetry]
-name = "mothertreesuggestions"
+name = "mtgardener"
 version = "0.1.0"
 description = ""
-authors = ["Your Name <you@example.com>"]
+authors = ["Eitan Romanoff <eitan.romanoff@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
 "discord.py" = { git = "https://github.com/Rapptz/discord.py.git", branch = "master" }
 PyYAML = "^6.0"
+pygsheets = {git = "git@github.com:nithinmurali/pygsheets.git"}
+google-auth-oauthlib = "^0.5.1"
+asgiref = "^3.5.0"
+gspread-asyncio = "^1.5.3"
 
 [tool.poetry.dev-dependencies]
 

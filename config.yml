@@ -7,5 +7,15 @@ bot_token: ENTER_BOT_TOKEN_HERE
 # Your discord server ID
 server_id: ENTER_SERVER_ID_HERE
 
-# The feedback channel ID
+# Channel IDs
 feedback_channel_id: ENTER_FEEDBACK_CHANNEL_ID_HERE
+attendance_channel_id: ENTER_ATTENDANCE_CHANNEL_ID_HERE
+
+# ProBot's "user" ID
+probot_id: ENTER_PROBOT_USER_ID_HERE
+
+# Path to the Google Application Service Account Credentials File
+google_service_account_creds: ENTER_CREDENTIALS_FILE_PATH_HERE
+
+# URL to the MT tracker sheet
+google_sheets_url: ENTER_SHEETS_URL_HERE
