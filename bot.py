@@ -88,7 +88,6 @@ async def watch(ctx):
         return await ctx.send("Usage: `!watch <direct_message_url>`")
 
     channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
-    # message = discord.utils.find(lambda m: m.jump_url == ctx.message.content[len('!watch'):].trim(), channel.history())
     message = await discord.utils.get(channel.history(), jump_url=ctx.message.content[len('!watch'):].strip())
     
     reaction_map = {}
