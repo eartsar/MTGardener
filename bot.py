@@ -40,6 +40,7 @@ ATTENDANCE_CHANNEL_ID = config['attendance_channel_id']
 
 intents = discord.Intents.default()
 intents.messages = True
+intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 SUGGESTION_TEMPLATE = '''
@@ -52,6 +53,7 @@ SUGGESTION_LENGTH_MINIMUM = 20
 logging.info("Loading Google Sheets integration...")
 GOOGLE_CREDS_JSON = config['google_service_account_creds']
 GOOGLE_SHEETS_URL = config['google_sheets_url']
+JOB_SHEET_URL = config['job_sheet_url']
 
 def get_creds():
     creds = Credentials.from_service_account_file(GOOGLE_CREDS_JSON)
@@ -83,6 +85,7 @@ async def suggest(ctx):
 
 
 @bot.command()
+@commands.has_any_role('Elder Tree Council', 'MT Gardener Dev')
 async def watch(ctx):
     if len(ctx.message.content.split(' ')) < 2:
         return await ctx.send("Usage: `!watch <direct_message_url>`")
@@ -128,6 +131,62 @@ async def watch(ctx):
         add_to_batch(batch_updates, user_id, col_values, 'x')
 
     await ws.batch_update(batch_updates)
+
+
+@bot.command()
+async def job(ctx):
+    user = ctx.message.author
+    account_id = f'{user.name}#{user.discriminator}'
+
+    agc = await agcm.authorize()
+    ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
+    ws = await ss.worksheet("Linkshell Roster")
+    col_values = await ws.col_values(2)
+    row_indexes = [i for i, x in enumerate(col_values) if x == account_id][:2]
+    if not row_indexes:
+        return
+
+    character_name_cell = await ws.acell(f'A{row_indexes[0] + 1}')
+    character_name = character_name_cell.value
+
+    alt_name = None
+    if len(row_indexes) > 1:
+        alt_name_cell = await ws.acell(f'A{row_indexes[1] + 1}')
+        alt_name = alt_name_cell.value
+
+    agc = await agcm.authorize()
+    ss = await agc.open_by_url(JOB_SHEET_URL)
+    ws = await ss.worksheet("Party Setup")
+    col_values = await ws.col_values(2)
+
+    try:
+        row = col_values.index(character_name) + 1
+        job_cell = await ws.acell(f'C{row}')
+        job = job_cell.value
+
+        alt_assigned = False
+        if alt_name:
+            try:
+                alt_row = col_values.index(alt_name) + 1
+                alt_job_cell = await ws.acell(f'C{alt_row}')
+                alt_job = alt_job_cell.value
+                alt_assigned = True
+            except:
+                pass
+
+        msg_main = f'[{character_name}: **{job}**]'
+        msg_sub = ''
+        if alt_assigned:
+            msg_sub = f'[{alt_name}: **{alt_job}**]'
+
+        await ctx.send(f"{ctx.message.author.mention} - {msg_main} {msg_sub}")
+    except:
+        await ctx.send(f"{ctx.message.author.mention} - You're not on the job sheet.")
+
+
+@bot.command()
+async def ping(ctx):
+    return await ctx.send("Pong!")
 
 
 bot.run(BOT_TOKEN)
