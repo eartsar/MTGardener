@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 
+import subprocess
 import argparse
 import yaml
 import logging
@@ -35,12 +36,14 @@ logging.basicConfig(
 
 logging.info("Loading configuration...")
 BOT_TOKEN = config['bot_token']
+MT_SERVER_ID = config['server_id']
 FEEDBACK_CHANNEL_ID = config['feedback_channel_id']
 ATTENDANCE_CHANNEL_ID = config['attendance_channel_id']
 
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 SUGGESTION_TEMPLATE = '''
@@ -70,7 +73,28 @@ PROBOT_ID = config['probot_id']
 
 
 
+# Custom check functions that can disallow commands from being run
+async def check_channel_is_dm(ctx):
+    return isinstance(ctx.channel, discord.channel.DMChannel)
+
+
+async def check_user_is_council_or_dev(ctx):
+    guild = bot.get_guild(MT_SERVER_ID)
+    user = ctx.message.author
+    member = discord.utils.find(lambda m: m.id == user.id, guild.members)
+    role = discord.utils.find(lambda r: r.name in ('Elder Tree Council', 'MT Gardener Dev'), member.roles)
+    return bool(role)
+
+
+# Error handler
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.errors.CheckFailure):
+        pass
+
+
 @bot.command()
+@commands.check(check_channel_is_dm)
 async def suggest(ctx):
     if len(ctx.message.content.split(' ')) < 2:
         return await ctx.send("Usage example: `!suggest I think that Barumaru should get all the loot from now on!`")
@@ -85,7 +109,8 @@ async def suggest(ctx):
 
 
 @bot.command()
-@commands.has_any_role('Elder Tree Council', 'MT Gardener Dev')
+@commands.check(check_user_is_council_or_dev)
+@commands.check(check_channel_is_dm)
 async def watch(ctx):
     if len(ctx.message.content.split(' ')) < 2:
         return await ctx.send("Usage: `!watch <direct_message_url>`")
@@ -134,6 +159,7 @@ async def watch(ctx):
 
 
 @bot.command()
+@commands.check(check_channel_is_dm)
 async def job(ctx):
     user = ctx.message.author
     account_id = f'{user.name}#{user.discriminator}'
@@ -187,6 +213,14 @@ async def job(ctx):
 @bot.command()
 async def ping(ctx):
     return await ctx.send("Pong!")
+
+
+@bot.command()
+@commands.check(check_channel_is_dm)
+async def changelog(ctx):
+    num_commits = 5
+    version_content = subprocess.check_output(['git', 'log', '--use-mailmap', f'-n{num_commits}'])
+    await ctx.send("Most recent changes:\n```" + str(version_content, 'utf-8') + "```")
 
 
 bot.run(BOT_TOKEN)
