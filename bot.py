@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import subprocess
 import argparse
@@ -44,6 +44,7 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.members = True
+intents.reactions = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 SUGGESTION_TEMPLATE = '''
@@ -69,7 +70,10 @@ def get_creds():
 
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
-PROBOT_ID = config['probot_id']
+PROBOT_ID = int(config['probot_id'])
+
+LAST_POLL_MESSAGE = None
+LAST_POLL_CHANGED = True
 
 
 
@@ -108,52 +112,66 @@ async def suggest(ctx):
     await ctx.send(f"I've passed along your suggestion. You can read the discussion here: {suggestion_message.jump_url}")
 
 
-@bot.command()
-@commands.check(check_user_is_council_or_dev)
-@commands.check(check_channel_is_dm)
-async def watch(ctx):
-    if len(ctx.message.content.split(' ')) < 2:
-        return await ctx.send("Usage: `!watch <direct_message_url>`")
-
-    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
-    message = await discord.utils.get(channel.history(), jump_url=ctx.message.content[len('!watch'):].strip())
-    
+async def update_att_sheet(last_poll_message):
+    print("Updating poll responses...")
+    LAST_POLL_CHANGED = False
     reaction_map = {}
-    for reaction in message.reactions:
+    for reaction in last_poll_message.reactions:
         reaction_map[reaction.emoji.name] = []
         async for user in reaction.users():
             if user.id == PROBOT_ID:
                 continue
             reaction_map[reaction.emoji.name].append(f'{user.name}#{user.discriminator}')
 
-    on_time = 'attcheck'
-    early = 'attearly'
-    late = 'attlate'
-    maybe = 'attmaybe'
-    decline = 'attdecline'
-
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     ws = await ss.worksheet("Linkshell Roster")
 
     # Generate batch-update commands for each user so we don't get rate-limited
-    def add_to_batch(batch_updates, user_id, user_id_col_values, val):
+    # Fields that are already the right value no-op and are not added to batch update
+    def add_to_batch(batch_updates, user_id, user_id_col_values, current_att_col_values, val):
         try:
-            row = user_id_col_values.index(user_id) + 1
-            batch_updates.append({'range': f'W{row}', 'values': [[val]]})
-        except:
-            pass
+            index = user_id_col_values.index(user_id)
+            current = current_att_col_values[index]
+            if current == val:
+                return
 
-    col_values = await ws.col_values(2)
+            print(f'Updating att poll response for {user_id}')
+            batch_updates.append({'range': f'W{index + 1}', 'values': [[val]]})
+        except Exception as e:
+            print(e)
+
+    user_id_col_values = await ws.col_values(2)
+
+    # determine the window of actual user names in the column, we need it to figure out non-responses
+    start_index = user_id_col_values.index('Discord Tag') + 1
+    end_index = user_id_col_values.index('', 6) - 1
+    
+    full_roster = set(user_id_col_values[start_index:end_index + 1])
+
+    current_att_col_values = await ws.col_values(23)
+    current_att_col_values.extend(['' for _ in range(len(user_id_col_values) - len(current_att_col_values))])
+    
+
+    update_map = {}
+    for user_id in (reaction_map['attcheck'] if 'attcheck' in reaction_map else []) + \
+            (reaction_map['attcheck2'] if 'attcheck2' in reaction_map else []):
+        update_map[user_id] = 'o'
+    
+    for user_id in (reaction_map['attearly'] if 'attearly' in reaction_map else []) + \
+            (reaction_map['attlate'] if 'attlate' in reaction_map else []) + \
+            (reaction_map['attmaybe'] if 'attmaybe' in reaction_map else []):
+        update_map[user_id] = '/'
+    
+    for user_id in reaction_map['attdecline'] if 'attdecline' in reaction_map else []:
+        update_map[user_id] = 'x'
+
+    for user_id in (full_roster - set(update_map.keys())):
+        update_map[user_id] = ''
+    
     batch_updates = []
-    for user_id in reaction_map['attcheck']:
-        add_to_batch(batch_updates, user_id, col_values, 'o')
-    
-    for user_id in reaction_map['attearly'] + reaction_map['attlate'] + reaction_map['attmaybe']:
-        add_to_batch(batch_updates, user_id, col_values, '/')
-    
-    for user_id in reaction_map['attdecline']:
-        add_to_batch(batch_updates, user_id, col_values, 'x')
+    for key in update_map:
+        add_to_batch(batch_updates, key, user_id_col_values, current_att_col_values, update_map[key])        
 
     await ws.batch_update(batch_updates)
 
@@ -221,6 +239,34 @@ async def changelog(ctx):
     num_commits = 5
     version_content = subprocess.check_output(['git', 'log', '--use-mailmap', f'-n{num_commits}'])
     await ctx.send("Most recent changes:\n```" + str(version_content, 'utf-8') + "```")
+
+
+@bot.command()
+@commands.check(check_channel_is_dm)
+@commands.check(check_user_is_council_or_dev)
+async def attupdate(ctx):
+    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
+    last_poll_message = None
+    async for message in channel.history(limit=10):
+        if message.author.id == int(PROBOT_ID):
+            last_poll_message = message
+            break
+    await update_att_sheet(last_poll_message)
+
+
+@bot.event
+async def on_ready():
+    global LAST_POLL_MESSAGE
+
+    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
+    last_poll_message = None
+    async for message in channel.history(limit=10):
+        if message.author.id == int(PROBOT_ID):
+            last_poll_message = message
+            break
+    print(f"Auto-loading latest att poll: {last_poll_message.jump_url}")
+    await update_att_sheet(last_poll_message)
+
 
 
 bot.run(BOT_TOKEN)
