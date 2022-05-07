@@ -80,7 +80,6 @@ agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 PROBOT_ID = int(config['probot_id'])
 
 LAST_POLL_MESSAGE = None
-LAST_POLL_CHANGED = True
 
 
 
@@ -121,7 +120,6 @@ async def suggest(ctx):
 
 async def update_att_sheet(last_poll_message):
     print("Updating poll responses...")
-    LAST_POLL_CHANGED = False
     reaction_map = {}
     for reaction in last_poll_message.reactions:
         reaction_map[reaction.emoji.name] = []
@@ -133,6 +131,39 @@ async def update_att_sheet(last_poll_message):
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     ws = await ss.worksheet("Linkshell Roster")
+
+    user_id_col_values = await ws.col_values(2)
+
+    # determine the window of actual user names in the column, we need it to figure out non-responses
+    start_index = user_id_col_values.index('Discord Tag') + 1
+    end_index = user_id_col_values.index('', 6) - 1
+    
+    full_roster = set(user_id_col_values[start_index:end_index + 1])
+
+    current_att_col_values = await ws.col_values(23)
+    current_att_col_values.extend(['' for _ in range(len(user_id_col_values) - len(current_att_col_values))])
+    
+
+    def get_concat_list_for_keys(reaction_map, keys):
+        ret = []
+        for key in keys:
+            if key not in reaction_map:
+                continue
+            ret.extend(reaction_map[key])
+        return ret
+
+    update_map = {}
+    for user_id in get_concat_list_for_keys(reaction_map, ['attcheck', 'attcheck2']):
+        update_map[user_id] = 'o'
+    
+    for user_id in get_concat_list_for_keys(reaction_map, ['attearly', 'attlate', 'attmaybe']):
+        update_map[user_id] = '/'
+    
+    for user_id in get_concat_list_for_keys(reaction_map, ['attdecline']):
+        update_map[user_id] = 'x'
+
+    for user_id in (full_roster - set(update_map.keys())):
+        update_map[user_id] = ''
 
     # Generate batch-update commands for each user so we don't get rate-limited
     # Fields that are already the right value no-op and are not added to batch update
@@ -148,34 +179,6 @@ async def update_att_sheet(last_poll_message):
         except Exception as e:
             print(e)
 
-    user_id_col_values = await ws.col_values(2)
-
-    # determine the window of actual user names in the column, we need it to figure out non-responses
-    start_index = user_id_col_values.index('Discord Tag') + 1
-    end_index = user_id_col_values.index('', 6) - 1
-    
-    full_roster = set(user_id_col_values[start_index:end_index + 1])
-
-    current_att_col_values = await ws.col_values(23)
-    current_att_col_values.extend(['' for _ in range(len(user_id_col_values) - len(current_att_col_values))])
-    
-
-    update_map = {}
-    for user_id in (reaction_map['attcheck'] if 'attcheck' in reaction_map else []) + \
-            (reaction_map['attcheck2'] if 'attcheck2' in reaction_map else []):
-        update_map[user_id] = 'o'
-    
-    for user_id in (reaction_map['attearly'] if 'attearly' in reaction_map else []) + \
-            (reaction_map['attlate'] if 'attlate' in reaction_map else []) + \
-            (reaction_map['attmaybe'] if 'attmaybe' in reaction_map else []):
-        update_map[user_id] = '/'
-    
-    for user_id in reaction_map['attdecline'] if 'attdecline' in reaction_map else []:
-        update_map[user_id] = 'x'
-
-    for user_id in (full_roster - set(update_map.keys())):
-        update_map[user_id] = ''
-    
     batch_updates = []
     for key in update_map:
         add_to_batch(batch_updates, key, user_id_col_values, current_att_col_values, update_map[key])        
@@ -264,7 +267,6 @@ async def attupdate(ctx):
 @bot.event
 async def on_ready():
     global LAST_POLL_MESSAGE
-
     channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
     last_poll_message = None
     async for message in channel.history(limit=10):
