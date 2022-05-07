@@ -45,7 +45,14 @@ intents.messages = True
 intents.message_content = True
 intents.members = True
 intents.reactions = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+
+bot = commands.Bot(command_prefix='!', case_insensitive=True, intents=intents)
+bot.description = """MT Gardener is Mother Tree's little personal assistant bot.
+
+It does little things to make life a little easier (hopefully) on the folks who wish to use it.
+To use it, send the bot a DM with a command, like `!changelog` or `!help`.
+
+Reach out to Barumaru with any feedback!"""
 
 SUGGESTION_TEMPLATE = '''
 **I've got a new suggestion to pass on!**
@@ -236,7 +243,7 @@ async def ping(ctx):
 @bot.command()
 @commands.check(check_channel_is_dm)
 async def changelog(ctx):
-    num_commits = 5
+    num_commits = 3
     version_content = subprocess.check_output(['git', 'log', '--use-mailmap', f'-n{num_commits}'])
     await ctx.send("Most recent changes:\n```" + str(version_content, 'utf-8') + "```")
 
