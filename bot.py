@@ -315,6 +315,7 @@ async def attupdate(ctx):
 
 
 @bot.command()
+@commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
 async def alertjobs(ctx):
     update_msg = "*Grabbing users to alert...* "
