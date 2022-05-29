@@ -10,6 +10,10 @@ server_id: ENTER_SERVER_ID_HERE
 # Channel IDs
 feedback_channel_id: ENTER_FEEDBACK_CHANNEL_ID_HERE
 attendance_channel_id: ENTER_ATTENDANCE_CHANNEL_ID_HERE
+alert_channel_id: ENTER_ALERT_CHANNEL_ID_HERE
+
+# Message IDs
+alert_message_id: ENTER_JOB_ALERT_MESSAGE_ID_HERE
 
 # ProBot's "user" ID
 probot_id: ENTER_PROBOT_USER_ID_HERE
