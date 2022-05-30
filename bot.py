@@ -45,6 +45,9 @@ ATTENDANCE_CHANNEL_ID = config["attendance_channel_id"]
 ALERT_CHANNEL_ID = config["alert_channel_id"]
 ALERT_MESSAGE_ID = config["alert_message_id"]
 
+ROSTER_SHEET_NAME = config["roster_sheet_name"]
+PARTY_SHEET_NAME = config["party_sheet_name"]
+
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -68,8 +71,9 @@ SUGGESTION_LENGTH_MINIMUM = 20
 
 logging.info("Loading Google Sheets integration...")
 GOOGLE_CREDS_JSON = config["google_service_account_creds"]
+
 GOOGLE_SHEETS_URL = config["google_sheets_url"]
-JOB_SHEET_URL = config["job_sheet_url"]
+JOB_SHEETS_URL = config["job_sheets_url"]
 
 
 def get_creds():
@@ -150,7 +154,7 @@ async def update_att_sheet(last_poll_message):
 
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
-    ws = await ss.worksheet("Linkshell Roster")
+    ws = await ss.worksheet(ROSTER_SHEET_NAME)
 
     user_id_col_values = await ws.col_values(2)
 
@@ -215,6 +219,7 @@ async def update_att_sheet(last_poll_message):
         )
 
     await ws.batch_update(batch_updates)
+    logging.info("Att poll updates done.")
 
 
 @bot.command()
@@ -223,30 +228,34 @@ async def job(ctx):
     msgs = await _job([ctx.message.author])
     if ctx.author in msgs:
         await ctx.author.send(msgs[ctx.author])
+    else:
+        await ctx.author.send(
+            "I couldn't find you in the LS roster. Check with council that you're properly added."
+        )
 
 
-async def _job(users):
+async def get_char_names_for_users(users):
     agc = await agcm.authorize()
     roster_ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
-    roster_ws = await roster_ss.worksheet("Linkshell Roster")
+    roster_ws = await roster_ss.worksheet(ROSTER_SHEET_NAME)
+
+    logging.info("Fetching character names...")
+    logging.info("  Pulling discord tags col from sheet...")
     col_values = await roster_ws.col_values(2)
 
-    party_ss = await agc.open_by_url(JOB_SHEET_URL)
-    party_ws = await party_ss.worksheet("Party Setup")
-
+    logging.info("  Mapping discord user to rows in roster sheet...")
     row_indexes = {}
     for user in users:
         account_id = f"{user.name}#{user.discriminator}"
-        logging.info("  Cross locating " + account_id)
         row_indexes[user.id] = [i for i, x in enumerate(col_values) if x == account_id][
             :2
         ]
 
-    msgs = {}
+    name_map = {}
     for user in users:
-        logging.info(f"  Handling user {user}")
+        logging.info(f"  Populating name map for {user}")
         if not row_indexes[user.id]:
-            logging.info("    Couldn't located account on sheet, skipping...")
+            logging.warning(f"Cannot locate {user} on the roster sheet")
             continue
 
         user_row_indexes = row_indexes[user.id]
@@ -258,31 +267,78 @@ async def _job(users):
             alt_name_cell = await roster_ws.acell(f"A{user_row_indexes[1] + 1}")
             alt_name = alt_name_cell.value
 
-        col_values = await party_ws.col_values(2)
+        name_map[user] = {"main": character_name, "alt": alt_name}
+
+    logging.info("  Done fetching character names!")
+    return name_map
+
+
+async def _job(users):
+    msgs = {}
+    character_names = {}
+    try:
+        character_names = await get_char_names_for_users(users)
+    except Exception as e:
+        logging.error(f"Something went wrong when trying to get the roster. {e}")
+        return msgs
+
+    agc = await agcm.authorize()
+    party_ss = await agc.open_by_url(JOB_SHEETS_URL)
+    party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
+
+    logging.info("Pulling job comp sheet assigned chracters...")
+    col_values = await party_ws.col_values(2)
+    logging.info(col_values)
+
+    for user in users:
+        logging.info(f"Checking character assignments for {user}...")
+        if user not in character_names:
+            logging.info(
+                f"{user} was not found in the roster. Double-check that they are on it."
+            )
+            continue
+        character_name = character_names[user]["main"]
+        alt_name = character_names[user]["alt"]
+
+        on_sheet = False
+        alt_assigned = False
+        main_assigned = False
         try:
-            row = col_values.index(character_name) + 1
-            job_cell = await party_ws.acell(f"C{row}")
-            job = job_cell.value
+            if character_name:
+                row = col_values.index(character_name) + 1
+                job_cell = await party_ws.acell(f"C{row}")
+                job = job_cell.value
+                main_assigned = True
+                on_sheet = True
+        except Exception as e:
+            logging.error(e)
+            pass
 
-            alt_assigned = False
+        try:
             if alt_name:
-                try:
-                    alt_row = col_values.index(alt_name) + 1
-                    alt_job_cell = await party_ws.acell(f"C{alt_row}")
-                    alt_job = alt_job_cell.value
-                    alt_assigned = True
-                except:
-                    pass
+                alt_row = col_values.index(alt_name) + 1
+                alt_job_cell = await party_ws.acell(f"C{alt_row}")
+                alt_job = alt_job_cell.value
+                alt_assigned = True
+                on_sheet = True
+        except Exception as e:
+            logging.error(e)
+            pass
 
-            msg_main = f"[{character_name}: **{job}**]"
+        if on_sheet:
+            msg_main = ""
             msg_sub = ""
+            if main_assigned:
+                msg_main = f"[{character_name}: **{job if job else 'Unspecified'}**] "
             if alt_assigned:
-                msg_sub = f"[{alt_name}: **{alt_job}**]"
+                msg_sub = f"[{alt_name}: **{alt_job if alt_job else 'Unspecified'}**]"
 
-            msgs[user] = f"{user.mention} - {msg_main} {msg_sub}"
-        except:
+            msgs[user] = f"{user.mention} - {msg_main}{msg_sub}"
+        else:
             msgs[user] = f"{user.mention} - You're not on the job sheet."
 
+    logging.info("Done fetching jobs for users.")
+    logging.info(msgs)
     return msgs
 
 
@@ -318,43 +374,59 @@ async def attupdate(ctx):
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
 async def alertjobs(ctx):
-    update_msg = "*Grabbing users to alert...* "
-    message = await ctx.send(update_msg)
+    try:
+        update_msg = "*Grabbing users to alert...* "
+        message = await ctx.send(update_msg)
 
-    alert_channel = discord.utils.get(bot.get_all_channels(), id=ALERT_CHANNEL_ID)
-    sub_message = await alert_channel.fetch_message(ALERT_MESSAGE_ID)
-    reaction = discord.utils.get(sub_message.reactions, emoji="📣")
-    update_msg += "**Done**\n*Fetching users' jobs...* "
-    await message.edit(content=update_msg)
+        alert_channel = discord.utils.get(bot.get_all_channels(), id=ALERT_CHANNEL_ID)
+        sub_message = await alert_channel.fetch_message(ALERT_MESSAGE_ID)
+        reaction = discord.utils.get(sub_message.reactions, emoji="📣")
+        update_msg += "**Done**\n*Fetching users' jobs...* "
+        await message.edit(content=update_msg)
 
-    def get_user_alert_section(alerted_users):
-        user_alert_section = "```"
-        for user in alerted_users:
-            user_alert_section += f"{user.name}#{user.discriminator} - {'DONE' if alerted_users[user] else 'PENDING'}\n"
-        user_alert_section += "```"
-        return user_alert_section
+        def get_user_alert_section(alerted_status):
+            user_alert_section = "```"
+            for user in alerted_status:
+                user_alert_section += (
+                    f"{user.name}#{user.discriminator} - {alerted_status[user]}\n"
+                )
+            user_alert_section += "```"
+            return user_alert_section
 
-    users = []
-    async for user in reaction.users():
-        users.append(user)
-    msgs = await _job(users)
-    alerted_users = {}
-    for user in users:
-        alerted_users[user] = False
+        users = []
+        async for user in reaction.users():
+            users.append(user)
+        msgs = await _job(users)
+        alerted_status = {}
+        for user in users:
+            alerted_status[user] = "PENDING"
 
-    update_msg += "**Done**\n"
-    await message.edit(content=update_msg + get_user_alert_section(alerted_users))
+        update_msg += "**Done**\n"
+        await message.edit(content=update_msg + get_user_alert_section(alerted_status))
 
-    for user in users:
-        await user.send(
-            "Reminder: You are signed up for the event tonight.\n" + msgs[user]
+        for user in users:
+            if user not in msgs:
+                await ctx.send(
+                    f"{user.name}#{user.discriminator} wasn't found in the roster. Double-check that they are added."
+                )
+                alerted_status[user] = "FAILED"
+            else:
+                # await user.send(
+                #     "Reminder: You are signed up for the event tonight.\n" + msgs[user]
+                # )
+                alerted_status[user] = "DONE"
+
+            await message.edit(
+                content=update_msg + get_user_alert_section(alerted_status)
+            )
+
+        await message.edit(
+            content=update_msg
+            + get_user_alert_section(alerted_status)
+            + "\n**All done!**"
         )
-        alerted_users[user] = True
-        await message.edit(content=update_msg + get_user_alert_section(alerted_users))
-
-    await message.edit(
-        content=update_msg + get_user_alert_section(alerted_users) + "\n**All done!**"
-    )
+    except Exception as e:
+        logging.error(e)
 
 
 @bot.event
@@ -367,7 +439,7 @@ async def on_ready():
             last_poll_message = message
             break
     logging.info(f"Auto-loading latest att poll: {last_poll_message.jump_url}")
-    await update_att_sheet(last_poll_message)
+    # await update_att_sheet(last_poll_message)
 
 
 bot.run(BOT_TOKEN)

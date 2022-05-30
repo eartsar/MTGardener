@@ -23,4 +23,8 @@ google_service_account_creds: ENTER_CREDENTIALS_FILE_PATH_HERE
 
 # URL to the MT tracker sheet
 google_sheets_url: ENTER_SHEETS_URL_HERE
-job_sheet_url: ENTER_JOB_SHEET_URL_HERE
+job_sheets_url: ENTER_JOB_SHEETS_URL_HERE
+
+# Sheet names
+roster_sheet_name: ENTER_ROSTER_SHEET_NAME_HERE
+party_sheet_name: ENTER_PARTY_SHEET_NAME_HERE
