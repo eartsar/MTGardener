@@ -411,9 +411,9 @@ async def alertjobs(ctx):
                 )
                 alerted_status[user] = "FAILED"
             else:
-                # await user.send(
-                #     "Reminder: You are signed up for the event tonight.\n" + msgs[user]
-                # )
+                await user.send(
+                    "Reminder: You are signed up for the event tonight.\n" + msgs[user]
+                )
                 alerted_status[user] = "DONE"
 
             await message.edit(
@@ -439,7 +439,7 @@ async def on_ready():
             last_poll_message = message
             break
     logging.info(f"Auto-loading latest att poll: {last_poll_message.jump_url}")
-    # await update_att_sheet(last_poll_message)
+    await update_att_sheet(last_poll_message)
 
 
 bot.run(BOT_TOKEN)
