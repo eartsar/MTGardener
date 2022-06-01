@@ -374,6 +374,7 @@ async def attupdate(ctx):
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
 async def alertjobs(ctx):
+    test = "test" in ctx.message.content
     try:
         update_msg = "*Grabbing users to alert...* "
         message = await ctx.send(update_msg)
@@ -404,12 +405,21 @@ async def alertjobs(ctx):
         update_msg += "**Done**\n"
         await message.edit(content=update_msg + get_user_alert_section(alerted_status))
 
+        test_message = None
+        test_content = "Simulated alerts...\n"
+        if test:
+            test_message = await ctx.send(test_content)
+
         for user in users:
             if user not in msgs:
                 await ctx.send(
                     f"{user.name}#{user.discriminator} wasn't found in the roster. Double-check that they are added."
                 )
                 alerted_status[user] = "FAILED"
+            elif test:
+                test_content += f"\n{msgs[user]}"
+                alerted_status[user] = "DONE"
+                await test_message.edit(content=test_content)
             else:
                 await user.send(
                     "Reminder: You are signed up for the event tonight.\n" + msgs[user]
