@@ -75,6 +75,8 @@ GOOGLE_CREDS_JSON = config["google_service_account_creds"]
 GOOGLE_SHEETS_URL = config["google_sheets_url"]
 JOB_SHEETS_URL = config["job_sheets_url"]
 
+SHEETS_LOCK = asyncio.Lock()
+
 
 def get_creds():
     creds = Credentials.from_service_account_file(GOOGLE_CREDS_JSON)
@@ -91,8 +93,6 @@ def get_creds():
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 PROBOT_ID = int(config["probot_id"])
-
-LAST_POLL_MESSAGE = None
 
 
 # Custom check functions that can disallow commands from being run
@@ -140,8 +140,7 @@ async def suggest(ctx):
     )
 
 
-async def update_att_sheet(last_poll_message):
-    logging.info("Updating poll responses...")
+async def att_poll_reactions(last_poll_message):
     reaction_map = {}
     for reaction in last_poll_message.reactions:
         reaction_map[reaction.emoji.name] = []
@@ -152,6 +151,20 @@ async def update_att_sheet(last_poll_message):
                 f"{user.name}#{user.discriminator}"
             )
 
+    return reaction_map
+
+
+async def get_last_poll_message():
+    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
+    async for message in channel.history(limit=10):
+        if message.author.id == int(PROBOT_ID):
+            return message
+
+
+async def update_att_sheet(last_poll_message):
+    logging.info("Updating poll responses...")
+
+    reaction_map = await att_poll_reactions(last_poll_message)
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     ws = await ss.worksheet(ROSTER_SHEET_NAME)
@@ -361,12 +374,7 @@ async def changelog(ctx):
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
 async def attupdate(ctx):
-    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
-    last_poll_message = None
-    async for message in channel.history(limit=10):
-        if message.author.id == int(PROBOT_ID):
-            last_poll_message = message
-            break
+    last_poll_message = await get_last_poll_message()
     await update_att_sheet(last_poll_message)
 
 
@@ -376,16 +384,17 @@ async def attupdate(ctx):
 async def alertjobs(ctx):
     test = "test" in ctx.message.content
     try:
-        update_msg = "*Grabbing users to alert...* "
+        update_msg = "*Grabbing users who have subscribed to alerts...* "
         message = await ctx.send(update_msg)
 
         alert_channel = discord.utils.get(bot.get_all_channels(), id=ALERT_CHANNEL_ID)
         sub_message = await alert_channel.fetch_message(ALERT_MESSAGE_ID)
         reaction = discord.utils.get(sub_message.reactions, emoji="📣")
-        update_msg += "**Done**\n*Fetching users' jobs...* "
-        await message.edit(content=update_msg)
 
         def get_user_alert_section(alerted_status):
+            if not alerted_status:
+                return "```\nAin't nobody here but us chickens!```"
+
             user_alert_section = "```"
             for user in alerted_status:
                 user_alert_section += (
@@ -397,12 +406,30 @@ async def alertjobs(ctx):
         users = []
         async for user in reaction.users():
             users.append(user)
+
+        logging.info("Cross-referencing latest attendance poll...")
+        update_msg += (
+            "**Done**\n*Checking attendance poll to omit those who can't go...* "
+        )
+        await message.edit(content=update_msg)
+        last_poll_message = await get_last_poll_message()
+        reaction_map = await att_poll_reactions(last_poll_message)
+        decline_tags = set(
+            reaction_map["attdecline"] if "attdecline" in reaction_map else []
+        )
+
+        logging.info("Omitting users who declined event: " + ", ".join(decline_tags))
+        users = [_ for _ in users if f"{_.name}#{_.discriminator}" not in decline_tags]
+
+        update_msg += "**Done**\n*Fetching users' jobs...* "
+        await message.edit(content=update_msg)
         msgs = await _job(users)
+
         alerted_status = {}
         for user in users:
             alerted_status[user] = "PENDING"
 
-        update_msg += "**Done**\n"
+        update_msg += "**Done** \n\n**Dispatching alerts to the following users!** "
         await message.edit(content=update_msg + get_user_alert_section(alerted_status))
 
         test_message = None
@@ -441,15 +468,7 @@ async def alertjobs(ctx):
 
 @bot.event
 async def on_ready():
-    global LAST_POLL_MESSAGE
-    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
-    last_poll_message = None
-    async for message in channel.history(limit=10):
-        if message.author.id == int(PROBOT_ID):
-            last_poll_message = message
-            break
-    logging.info(f"Auto-loading latest att poll: {last_poll_message.jump_url}")
-    await update_att_sheet(last_poll_message)
+    logging.info("Bot is ready!")
 
 
 bot.run(BOT_TOKEN)
