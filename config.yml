@@ -11,6 +11,7 @@ server_id: ENTER_SERVER_ID_HERE
 feedback_channel_id: ENTER_FEEDBACK_CHANNEL_ID_HERE
 attendance_channel_id: ENTER_ATTENDANCE_CHANNEL_ID_HERE
 alert_channel_id: ENTER_ALERT_CHANNEL_ID_HERE
+party_comp_channel_id: PARTY_COMP_CHANNEL_ID_HERE
 
 # Message IDs
 alert_message_id: ENTER_JOB_ALERT_MESSAGE_ID_HERE

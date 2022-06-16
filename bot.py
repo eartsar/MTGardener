@@ -47,6 +47,7 @@ ALERT_MESSAGE_ID = config["alert_message_id"]
 
 ROSTER_SHEET_NAME = config["roster_sheet_name"]
 PARTY_SHEET_NAME = config["party_sheet_name"]
+PARTY_COMP_CHANNEL_ID = config["party_comp_channel_id"]
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -143,6 +144,8 @@ async def suggest(ctx):
 async def att_poll_reactions(last_poll_message):
     reaction_map = {}
     for reaction in last_poll_message.reactions:
+        if type(reaction.emoji) == str:
+            continue
         reaction_map[reaction.emoji.name] = []
         async for user in reaction.users():
             if user.id == PROBOT_ID:
@@ -381,6 +384,38 @@ async def attupdate(ctx):
 @bot.command()
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
+async def publishjobs(ctx):
+    msg = await construct_joblist_message()
+    party_channel = discord.utils.get(bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID)
+    await party_channel.send(msg)
+
+
+async def construct_joblist_message():
+    agc = await agcm.authorize()
+    party_ss = await agc.open_by_url(JOB_SHEETS_URL)
+    party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
+    data = await party_ws.get_all_values()
+
+    msg = "```"
+    for row in range(1, 43):
+        if (row - 1) % 7 == 0:
+            msg += f"\n{data[row][0]}\n"
+        else:
+
+            name = data[row][1]
+            job = data[row][2]
+            note = data[row][0]
+            line = f"  {name} {('(' + job + ')') if job else ''}{('      [' + note + ']') if note else ''}\n"
+            if line.strip():
+                msg += line
+
+    msg += "```"
+    return msg
+
+
+@bot.command()
+@commands.check(check_channel_is_dm)
+@commands.check(check_user_is_council_or_dev)
 async def alertjobs(ctx):
     test = "test" in ctx.message.content
     try:
@@ -462,6 +497,14 @@ async def alertjobs(ctx):
             + get_user_alert_section(alerted_status)
             + "\n**All done!**"
         )
+
+        comp_msg = await construct_joblist_message()
+        party_channel = discord.utils.get(bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID)
+        if test:
+            await ctx.send("The following job comp would be posted:\n" + comp_msg)
+        else:
+            await party_channel.send(comp_msg)
+
     except Exception as e:
         logging.error(e)
 
