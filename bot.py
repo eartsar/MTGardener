@@ -47,6 +47,7 @@ ALERT_MESSAGE_ID = config["alert_message_id"]
 
 ROSTER_SHEET_NAME = config["roster_sheet_name"]
 PARTY_SHEET_NAME = config["party_sheet_name"]
+DYNAMIS_WISHLIST_SHEET_NAME = config["dynamis_wishlist_sheet_name"]
 PARTY_COMP_CHANNEL_ID = config["party_comp_channel_id"]
 
 intents = discord.Intents.default()
@@ -507,6 +508,46 @@ async def alertjobs(ctx):
 
     except Exception as e:
         logging.error(e)
+
+
+@bot.command()
+@commands.check(check_user_is_council_or_dev)
+async def dyna(ctx):
+    if len(ctx.message.content.split(" ")) != 2:
+        return await ctx.send("Usage example: `!dyna WHM`")
+
+    job = ctx.message.content.split(" ")[1]
+    valid_jobs = ('war', 'mnk', 'whm', 'blm', 'rdm', 'thf', 'pld', 'drk', 'bst',
+        'brd', 'rng', 'sam', 'nin', 'drg', 'smn', 'blu', 'cor', 'pup')
+    if job not in valid_jobs:
+        return await ctx.send("That is not a valid job.")
+
+    agc = await agcm.authorize()
+    ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
+    ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
+
+    character_name_values = await ws.col_values(1)
+    choice_one = await ws.col_values(2)
+    choice_two = await ws.col_values(3)
+    choice_other = await ws.col_values(4)
+
+
+    who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower()]
+    who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower()]
+    who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower()]
+
+    newline = "\n"
+    tics = "```"
+    msg = f'Loot List for **{job.upper()}**\n'
+    if who_ones or who_twos or who_others:
+        msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
+        msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
+        msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+    else:
+        msg += '```\nFREE LOT```'
+    
+    await ctx.send(msg)
+
 
 
 @bot.event
