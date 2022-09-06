@@ -511,7 +511,6 @@ async def alertjobs(ctx):
 
 
 @bot.command()
-@commands.check(check_user_is_council_or_dev)
 async def dyna(ctx):
     if len(ctx.message.content.split(" ")) != 2:
         return await ctx.send("Usage example: `!dyna WHM`")
@@ -527,14 +526,16 @@ async def dyna(ctx):
     ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
 
     character_name_values = await ws.col_values(1)
-    choice_one = await ws.col_values(2)
-    choice_two = await ws.col_values(3)
-    choice_other = await ws.col_values(4)
+    choice_one_got = await ws.col_values(2)
+    choice_one = await ws.col_values(3)
+    choice_two_got = await ws.col_values(4)
+    choice_two = await ws.col_values(5)
+    choice_other_got = await ws.col_values(6)
+    choice_other = await ws.col_values(7)
 
-
-    who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower()]
-    who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower()]
-    who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower()]
+    who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower() and choice_one_got[i] == 'FALSE']
+    who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower() and choice_two_got[i] == 'FALSE']
+    who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower() and choice_other_got[i] == 'FALSE']
 
     newline = "\n"
     tics = "```"
