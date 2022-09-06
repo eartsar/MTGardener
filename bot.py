@@ -484,10 +484,13 @@ async def alertjobs(ctx):
                 alerted_status[user] = "DONE"
                 await test_message.edit(content=test_content)
             else:
-                await user.send(
-                    "Reminder: You are signed up for the event tonight.\n" + msgs[user]
-                )
-                alerted_status[user] = "DONE"
+                try:
+                    await user.send(
+                        "Reminder: You are signed up for the event tonight.\n" + msgs[user]
+                    )
+                    alerted_status[user] = "DONE"
+                except:
+                    alerted_status[user] = "FAILED"
 
             await message.edit(
                 content=update_msg + get_user_alert_section(alerted_status)
