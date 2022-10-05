@@ -515,43 +515,75 @@ async def alertjobs(ctx):
 
 @bot.command()
 async def dyna(ctx):
-    if len(ctx.message.content.split(" ")) != 2:
-        return await ctx.send("Usage example: `!dyna WHM`")
+    tokens = [token.lower() for token in ctx.message.content.split(" ")]
+    if len(tokens) not in (2, 3):
+        return await ctx.send("Usage example: `!dyna WHM` or `!dyna BLU acc` or `!dyna COR -1`")
 
-    job = ctx.message.content.split(" ")[1]
+    job = tokens[1]    
+    choice_type = 'af' if len(tokens) != 3 else tokens[2]
     valid_jobs = ('war', 'mnk', 'whm', 'blm', 'rdm', 'thf', 'pld', 'drk', 'bst',
         'brd', 'rng', 'sam', 'nin', 'drg', 'smn', 'blu', 'cor', 'pup')
+    valid_choice_types = ('af', '-1', 'acc')
+    
     if job not in valid_jobs:
         return await ctx.send("That is not a valid job.")
+    elif choice_type not in valid_choice_types:
+        return await ctx.send("That is not a valid drop choice. Must be either af (default), -1, or acc.")
 
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
 
-    character_name_values = await ws.col_values(1)
-    choice_one_got = await ws.col_values(2)
-    choice_one = await ws.col_values(3)
-    choice_two_got = await ws.col_values(4)
-    choice_two = await ws.col_values(5)
-    choice_other_got = await ws.col_values(6)
-    choice_other = await ws.col_values(7)
-
-    who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower() and choice_one_got[i] == 'FALSE']
-    who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower() and choice_two_got[i] == 'FALSE']
-    who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower() and choice_other_got[i] == 'FALSE']
-
+    msg = f'Loot List for **{job.upper()} [{choice_type.upper()}]**\n'
     newline = "\n"
     tics = "```"
-    msg = f'Loot List for **{job.upper()}**\n'
-    if who_ones or who_twos or who_others:
-        msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
-        msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
-        msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
-    else:
-        msg += '```\nFREE LOT```'
-    
-    await ctx.send(msg)
 
+    character_name_values = await ws.col_values(1)
+    if choice_type == 'af':
+        choice_one_got = await ws.col_values(2)
+        choice_one = await ws.col_values(3)
+        choice_two_got = await ws.col_values(4)
+        choice_two = await ws.col_values(5)
+        choice_other_got = await ws.col_values(6)
+        choice_other = await ws.col_values(7)
+
+        who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower() and choice_one_got[i] == 'FALSE']
+        who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower() and choice_two_got[i] == 'FALSE']
+        who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower() and choice_other_got[i] == 'FALSE']
+        
+        if who_ones or who_twos or who_others:
+            msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
+            msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
+            msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+        else:
+            msg += '```\nFREE LOT```'
+        
+        await ctx.send(msg)
+    else:
+        choice_minus_one_got = await ws.col_values(9)
+        choice_minus_one = await ws.col_values(10)
+        choice_acc_got = await ws.col_values(11)
+        choice_acc = await ws.col_values(12)
+        choice_other_got = await ws.col_values(13)
+        choice_other = await ws.col_values(14)
+
+        who_ones = None
+        if choice_type == '-1':
+            who_ones = [character_name_values[i] for i,v in enumerate(choice_minus_one) if job.lower() in v.lower() and choice_minus_one_got[i] == 'FALSE']
+        else:
+            who_ones = [character_name_values[i] for i,v in enumerate(choice_acc) if job.lower() in v.lower() and choice_acc_got[i] == 'FALSE']
+        
+        mapping = str.maketrans('', '', ' ,."')
+        who_others = [character_name_values[i] for i,v in enumerate(choice_other) if f"{job}{choice_type}" in v.lower().translate(mapping) and choice_other_got[i] == 'FALSE']
+
+        print([v.lower().translate(mapping) for i,v in enumerate(choice_other)])
+        if who_ones or who_others:
+            msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
+            msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+        else:
+            msg += '```\nFREE LOT```'
+        
+        await ctx.send(msg)
 
 
 @bot.event
