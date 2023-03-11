@@ -76,6 +76,7 @@ GOOGLE_CREDS_JSON = config["google_service_account_creds"]
 
 GOOGLE_SHEETS_URL = config["google_sheets_url"]
 JOB_SHEETS_URL = config["job_sheets_url"]
+COUNCIL_SHEETS_URL = config["council_sheets_url"]
 
 SHEETS_LOCK = asyncio.Lock()
 
@@ -584,6 +585,125 @@ async def dyna(ctx):
             msg += '```\nFREE LOT```'
         
         await ctx.send(msg)
+
+
+@bot.command()
+async def wishlist(ctx, link=None):
+    from loot_mappings import DYNAMIS_MAIN, DYNAMIS_ALT, SKY_MAIN, SKY_ALT, SEA_MAIN, SEA_ALT, LIMBUS_MAIN, LIMBUS_ALT
+    logging.info("Wishlist request initiated.")
+    
+    logging.info("  Authorizing Google Sheets...")
+    agc = await agcm.authorize()
+    council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
+    
+    async def fetch_wishlist_url(author):
+        author_id = f'{ctx.author.name}#{ctx.author.discriminator}'.lower()
+        logging.info(f"  Fetching wishlist URL for {author_id}")
+
+        wishlist_lookups = await council_ss.worksheet('Wishlist Submissions')
+
+        discord_ids = [_.lower() for _ in await wishlist_lookups.col_values(4)]
+        discord_id_index = discord_ids.index(author_id) + 1
+        wishlist_url = (await wishlist_lookups.get_values(f'E{discord_id_index}'))[0][0]
+        return wishlist_url
+
+    wishlist_url = None
+    try:
+        if not link:
+            wishlist_url = await fetch_wishlist_url(ctx.author)
+        elif link == 'link':
+            # Special case: "!wishlist link" --> Get a link to the requester's wishlist.
+            wishlist_url = await fetch_wishlist_url(ctx.author)
+            return await ctx.send(f"Your wishlist link: {wishlist_url}")
+        else:
+            wishlist_url = link
+    except Exception as e:
+        logging.error(e)
+        return await ctx.send("ERROR: Check with council to make sure your wishlist is registered.")
+
+    
+    update_msg = "Syncing wishlist with council's sheet... "
+    message = await ctx.send(update_msg)
+
+    logging.info("  Fetching wishlist sheet reference...")
+    wishlist_ss = None
+    try:
+        wishlist_ss = await agc.open_by_url(wishlist_url)
+    except Exception as e:
+        logging.error(e)
+        return await ctx.send("ERROR: Wishlist URL is not valid.")
+    
+    logging.info("  Fetching council worksheet references...")
+    council_dynamis_ws = await council_ss.worksheet('Dynamis Wishlists')
+    council_sky_ws = await council_ss.worksheet('Sky Requests')
+    council_sea_ws = await council_ss.worksheet('Sea Requests')
+    council_limbus_ws = await council_ss.worksheet('Limbus Requests')
+
+    logging.info("  Looking up character names for wishlist sync...")
+    charname_main = None
+    charname_alt = None
+    try:
+        charname_main = (await wishlist_ss.values_get('INSTRUCTIONS!D2'))['values'][0][0].lower()
+        charname_alt = (await wishlist_ss.values_get('INSTRUCTIONS!F2'))['values'][0][0].lower()
+    except Exception as e:
+        pass
+
+    if not charname_main:
+        logging.error("Character names are not filled out!")
+        return await ctx.author.send("Your wishlist doesn't seem to have your character names filled in.")
+
+    logging.info(f"  Syncing wishlist items for {charname_main}{' and ' + charname_alt if charname_alt else ''}...")
+
+    async def push_wishlist_updates(charname, mapping, wishlist_ss, council_ws):
+        dest = next(iter(mapping))
+        dest = dest[:dest.index('!')]
+        logging.info(f'    {charname}: pulling from {dest}')
+        charname_col_values = [_.lower() for _ in await council_ws.col_values(1)]
+        
+        row_index = None
+        try:
+            row_index = charname_col_values.index(charname) + 1
+        except:
+            logging.warning(f"    Could not find {charname} in {council_ws}")
+            return
+
+        batch_gets = list(mapping.keys())
+        items_to_push = await wishlist_ss.values_batch_get(ranges=batch_gets)
+    
+        logging.info(f'    {charname}: pushing to council sheet {council_ws.title}')
+        batch_updates = []
+        batch_clears = []
+        for item in items_to_push['valueRanges']:
+            destination = mapping[item['range']] + str(row_index)
+            if 'values' in item:
+                batch_updates.append({"range": destination, "values": item['values']})
+            else:
+                batch_clears.append(destination)
+            
+        await council_ws.batch_clear(batch_clears)
+        return await council_ws.batch_update(batch_updates)
+
+    dynamis_megadict_main = {k: v for d in DYNAMIS_MAIN for k, v in d.items()}
+    dynamis_megadict_alt = {k: v for d in DYNAMIS_ALT for k, v in d.items()}
+        
+    try:
+        # Main
+        await push_wishlist_updates(charname_main, dynamis_megadict_main, wishlist_ss, council_dynamis_ws)
+        await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
+        await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
+        await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
+
+        # Alt
+        if charname_alt:
+            await push_wishlist_updates(charname_alt, dynamis_megadict_alt, wishlist_ss, council_dynamis_ws)
+            await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
+            await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
+            await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
+    except Exception as e:
+        logging.error(e)
+
+    logging.info("Done!")
+    return await message.edit(content=update_msg + "**Done!**")
 
 
 @bot.event
