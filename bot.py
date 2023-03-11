@@ -690,24 +690,24 @@ async def wishlist(ctx, link=None):
     try:
         # Main
         await push_wishlist_updates(charname_main, dynamis_megadict_main, wishlist_ss, council_dynamis_ws)
-        await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
-        await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
-        await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
+        # await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
+        # await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
+        # await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
 
         # Alt
         if charname_alt:
             await push_wishlist_updates(charname_alt, dynamis_megadict_alt, wishlist_ss, council_dynamis_ws)
-            await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
-            await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
-            await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
+            # await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
+            # await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
+            # await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
     except Exception as e:
         logging.error(e)
 
 
     # TODO: clean this up
     wishlist_lookups = await council_ss.worksheet('Wishlist Submissions')
-    discord_ids = [_.lower() for _ in (await wishlist_lookups.col_values(4))]
-    update_index = discord_ids.index(f'{ctx.author.name}#{ctx.author.discriminator}'.lower()) + 1
+    charnames = [_.lower() for _ in (await wishlist_lookups.col_values(1))]
+    update_index = charnames.index(charname_main.lower()) + 1
     await wishlist_lookups.update_acell(f'C{update_index}', str(datetime.datetime.now()))
     logging.info("Done!")
     return await message.edit(content=update_msg + "**Done!**")
