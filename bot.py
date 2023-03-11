@@ -643,8 +643,8 @@ async def wishlist(ctx, link=None):
     charname_main = None
     charname_alt = None
     try:
-        charname_main = (await wishlist_ss.values_get('INSTRUCTIONS!D2'))['values'][0][0].lower()
-        charname_alt = (await wishlist_ss.values_get('INSTRUCTIONS!F2'))['values'][0][0].lower()
+        charname_main = (await wishlist_ss.values_get('INSTRUCTIONS!D2'))['values'][0][0].lower().strip()
+        charname_alt = (await wishlist_ss.values_get('INSTRUCTIONS!F2'))['values'][0][0].lower().strip()
     except Exception as e:
         pass
 
