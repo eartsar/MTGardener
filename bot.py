@@ -108,7 +108,7 @@ async def check_user_is_council_or_dev(ctx):
     user = ctx.message.author
     member = discord.utils.find(lambda m: m.id == user.id, guild.members)
     role = discord.utils.find(
-        lambda r: r.name in ("Elder Tree Council", "MT Gardener Dev"), member.roles
+        lambda r: r.name in ("Elder Tree Treants (Council)", "MT Gardener Dev"), member.roles
     )
     return bool(role)
 
@@ -704,6 +704,17 @@ async def wishlist(ctx, link=None):
 
     logging.info("Done!")
     return await message.edit(content=update_msg + "**Done!**")
+
+
+@bot.command()
+@commands.check(check_user_is_council_or_dev)
+async def kys(ctx):
+    import os, sys
+    await ctx.send('💀 byebye...')
+    try:
+        os.execv(sys.executable, ['python'] + sys.argv)
+    except Exception as e:
+        logging.error("Exception " + str(e))
 
 
 @bot.event
