@@ -690,16 +690,16 @@ async def wishlist(ctx, link=None):
     try:
         # Main
         await push_wishlist_updates(charname_main, dynamis_megadict_main, wishlist_ss, council_dynamis_ws)
-        # await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
-        # await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
-        # await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
+        await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
+        await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
+        await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
 
         # Alt
         if charname_alt:
             await push_wishlist_updates(charname_alt, dynamis_megadict_alt, wishlist_ss, council_dynamis_ws)
-            # await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
-            # await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
-            # await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
+            await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
+            await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
+            await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
     except Exception as e:
         logging.error(e)
 
