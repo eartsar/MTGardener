@@ -702,6 +702,12 @@ async def wishlist(ctx, link=None):
     except Exception as e:
         logging.error(e)
 
+
+    # TODO: clean this up
+    wishlist_lookups = await council_ss.worksheet('Wishlist Submissions')
+    discord_ids = [_.lower() for _ in (await wishlist_lookups.col_values(4))]
+    update_index = discord_ids.index(f'{ctx.author.name}#{ctx.author.discriminator}'.lower()) + 1
+    await wishlist_lookups.update_acell(f'C{update_index}', '=NOW()')
     logging.info("Done!")
     return await message.edit(content=update_msg + "**Done!**")
 
