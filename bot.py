@@ -79,8 +79,6 @@ GOOGLE_SHEETS_URL = config["google_sheets_url"]
 JOB_SHEETS_URL = config["job_sheets_url"]
 COUNCIL_SHEETS_URL = config["council_sheets_url"]
 
-SHEETS_LOCK = asyncio.Lock()
-
 
 def get_creds():
     creds = Credentials.from_service_account_file(GOOGLE_CREDS_JSON)
@@ -97,6 +95,23 @@ def get_creds():
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 PROBOT_ID = int(config["probot_id"])
+
+
+
+def shared_max_concurrency():
+    '''Modified implementation of MaxConcurrency so that it's a shared lock'''
+    con_instance = commands.MaxConcurrency(1, per=commands.BucketType.default, wait=True)
+    def decorator(func):
+        if isinstance(func, commands.Command):
+            func._max_concurrency = con_instance
+        else:
+            func.__commands_max_concurrency__ = con_instance
+        return func
+
+    return decorator
+
+# Create the shared decorator
+sheets_access = shared_max_concurrency()
 
 
 # Custom check functions that can disallow commands from being run
@@ -243,6 +258,7 @@ async def update_att_sheet(last_poll_message):
 
 @bot.command()
 @commands.check(check_channel_is_dm)
+@sheets_access
 async def job(ctx):
     msgs = await _job([ctx.message.author])
     if ctx.author in msgs:
@@ -251,6 +267,13 @@ async def job(ctx):
         await ctx.author.send(
             "I couldn't find you in the LS roster. Check with council that you're properly added."
         )
+
+
+@bot.command()
+@commands.check(check_channel_is_dm)
+@sheets_access
+async def test(ctx):
+    return await ctx.send('testing...')
 
 
 async def get_char_names_for_users(users):
@@ -379,6 +402,7 @@ async def changelog(ctx):
 @bot.command()
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
+@sheets_access
 async def attupdate(ctx):
     last_poll_message = await get_last_poll_message()
     await update_att_sheet(last_poll_message)
@@ -387,6 +411,7 @@ async def attupdate(ctx):
 @bot.command()
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
+@sheets_access
 async def publishjobs(ctx):
     msg = await construct_joblist_message()
     party_channel = discord.utils.get(bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID)
@@ -419,6 +444,7 @@ async def construct_joblist_message():
 @bot.command()
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
+@sheets_access
 async def alertjobs(ctx):
     test = "test" in ctx.message.content
     try:
@@ -516,6 +542,7 @@ async def alertjobs(ctx):
 
 
 @bot.command()
+@sheets_access
 async def dyna(ctx):
     tokens = [token.lower() for token in ctx.message.content.split(" ")]
     if len(tokens) not in (2, 3):
@@ -589,6 +616,7 @@ async def dyna(ctx):
 
 
 @bot.command()
+@sheets_access
 async def wishlist(ctx, link=None):
     from loot_mappings import DYNAMIS_MAIN, DYNAMIS_ALT, SKY_MAIN, SKY_ALT, SEA_MAIN, SEA_ALT, LIMBUS_MAIN, LIMBUS_ALT
     logging.info("Wishlist request initiated.")
