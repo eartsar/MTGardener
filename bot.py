@@ -1,11 +1,13 @@
 import discord
 from discord.ext import commands, tasks
 
+import re
 import subprocess
 import argparse
 import yaml
 import logging
-import datetime
+from python_log_indenter import IndentedLoggerAdapter
+import arrow
 
 import asyncio
 import gspread_asyncio
@@ -37,8 +39,9 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+logger = IndentedLoggerAdapter(logging.getLogger(__name__))
 
-logging.info("Loading configuration...")
+logger.info("Loading configuration...")
 BOT_TOKEN = config["bot_token"]
 MT_SERVER_ID = config["server_id"]
 FEEDBACK_CHANNEL_ID = config["feedback_channel_id"]
@@ -72,7 +75,7 @@ SUGGESTION_TEMPLATE = """
 """
 SUGGESTION_LENGTH_MINIMUM = 20
 
-logging.info("Loading Google Sheets integration...")
+logger.info("Loading Google Sheets integration...")
 GOOGLE_CREDS_JSON = config["google_service_account_creds"]
 
 GOOGLE_SHEETS_URL = config["google_sheets_url"]
@@ -97,10 +100,12 @@ agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 PROBOT_ID = int(config["probot_id"])
 
 
-
 def shared_max_concurrency():
-    '''Modified implementation of MaxConcurrency so that it's a shared lock'''
-    con_instance = commands.MaxConcurrency(1, per=commands.BucketType.default, wait=True)
+    """Modified implementation of MaxConcurrency so that it's a shared lock"""
+    con_instance = commands.MaxConcurrency(
+        1, per=commands.BucketType.default, wait=True
+    )
+
     def decorator(func):
         if isinstance(func, commands.Command):
             func._max_concurrency = con_instance
@@ -109,6 +114,7 @@ def shared_max_concurrency():
         return func
 
     return decorator
+
 
 # Create the shared decorator
 sheets_access = shared_max_concurrency()
@@ -124,7 +130,8 @@ async def check_user_is_council_or_dev(ctx):
     user = ctx.message.author
     member = discord.utils.find(lambda m: m.id == user.id, guild.members)
     role = discord.utils.find(
-        lambda r: r.name in ("Elder Tree Treants (Council)", "MT Gardener Dev"), member.roles
+        lambda r: r.name in ("Elder Tree Treants (Council)", "MT Gardener Dev"),
+        member.roles,
     )
     return bool(role)
 
@@ -183,7 +190,8 @@ async def get_last_poll_message():
 
 
 async def update_att_sheet(last_poll_message):
-    logging.info("Updating poll responses...")
+    logger.push("update_att_sheet")
+    logger.info("Updating poll responses...")
 
     reaction_map = await att_poll_reactions(last_poll_message)
     agc = await agcm.authorize()
@@ -237,10 +245,10 @@ async def update_att_sheet(last_poll_message):
             if current == val:
                 return
 
-            logging.info(f"Updating att poll response for {user_id}")
+            logger.info(f"Updating att poll response for {user_id}")
             batch_updates.append({"range": f"W{index + 1}", "values": [[val]]})
         except Exception as e:
-            logging.info(e)
+            logger.info(e)
 
     batch_updates = []
     for key in update_map:
@@ -253,7 +261,8 @@ async def update_att_sheet(last_poll_message):
         )
 
     await ws.batch_update(batch_updates)
-    logging.info("Att poll updates done.")
+    logger.info("Att poll updates done.")
+    logger.pop("update_att_sheet")
 
 
 @bot.command()
@@ -273,7 +282,7 @@ async def job(ctx):
 @commands.check(check_channel_is_dm)
 @sheets_access
 async def test(ctx):
-    return await ctx.send('testing...')
+    return await ctx.send("testing...")
 
 
 async def get_char_names_for_users(users):
@@ -281,11 +290,12 @@ async def get_char_names_for_users(users):
     roster_ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     roster_ws = await roster_ss.worksheet(ROSTER_SHEET_NAME)
 
-    logging.info("Fetching character names...")
-    logging.info("  Pulling discord tags col from sheet...")
+    logger.push("get_char_names_for_users")
+    logger.info("Fetching character names...").add()
+    logger.info("Pulling discord tags col from sheet...")
     col_values = await roster_ws.col_values(2)
 
-    logging.info("  Mapping discord user to rows in roster sheet...")
+    logger.info("Mapping discord user to rows in roster sheet...")
     row_indexes = {}
     for user in users:
         account_id = f"{user.name}#{user.discriminator}"
@@ -295,9 +305,9 @@ async def get_char_names_for_users(users):
 
     name_map = {}
     for user in users:
-        logging.info(f"  Populating name map for {user}")
+        logger.info(f"Populating name map for {user}")
         if not row_indexes[user.id]:
-            logging.warning(f"Cannot locate {user} on the roster sheet")
+            logger.warning(f"Cannot locate {user} on the roster sheet")
             continue
 
         user_row_indexes = row_indexes[user.id]
@@ -311,7 +321,8 @@ async def get_char_names_for_users(users):
 
         name_map[user] = {"main": character_name, "alt": alt_name}
 
-    logging.info("  Done fetching character names!")
+    logger.info("Done fetching character names!")
+    logger.pop("get_char_names_for_users")
     return name_map
 
 
@@ -321,21 +332,21 @@ async def _job(users):
     try:
         character_names = await get_char_names_for_users(users)
     except Exception as e:
-        logging.error(f"Something went wrong when trying to get the roster. {e}")
+        logger.error(f"Something went wrong when trying to get the roster. {e}")
         return msgs
 
     agc = await agcm.authorize()
     party_ss = await agc.open_by_url(JOB_SHEETS_URL)
     party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
 
-    logging.info("Pulling job comp sheet assigned chracters...")
+    logger.info("Pulling job comp sheet assigned chracters...")
     col_values = await party_ws.col_values(2)
-    logging.info(col_values)
+    logger.info(col_values)
 
     for user in users:
-        logging.info(f"Checking character assignments for {user}...")
+        logger.info(f"Checking character assignments for {user}...")
         if user not in character_names:
-            logging.info(
+            logger.info(
                 f"{user} was not found in the roster. Double-check that they are on it."
             )
             continue
@@ -353,7 +364,7 @@ async def _job(users):
                 main_assigned = True
                 on_sheet = True
         except Exception as e:
-            logging.error(e)
+            logger.error(e)
             pass
 
         try:
@@ -364,7 +375,7 @@ async def _job(users):
                 alt_assigned = True
                 on_sheet = True
         except Exception as e:
-            logging.error(e)
+            logger.error(e)
             pass
 
         if on_sheet:
@@ -379,8 +390,8 @@ async def _job(users):
         else:
             msgs[user] = f"{user.mention} - You're not on the job sheet."
 
-    logging.info("Done fetching jobs for users.")
-    logging.info(msgs)
+    logger.info("Done fetching jobs for users.")
+    logger.info(msgs)
     return msgs
 
 
@@ -429,7 +440,6 @@ async def construct_joblist_message():
         if (row - 1) % 7 == 0:
             msg += f"\n{data[row][0]}\n"
         else:
-
             name = data[row][1]
             job = data[row][2]
             note = data[row][0]
@@ -446,6 +456,7 @@ async def construct_joblist_message():
 @commands.check(check_user_is_council_or_dev)
 @sheets_access
 async def alertjobs(ctx):
+    logger.push("alertjobs")
     test = "test" in ctx.message.content
     try:
         update_msg = "*Grabbing users who have subscribed to alerts...* "
@@ -471,7 +482,7 @@ async def alertjobs(ctx):
         async for user in reaction.users():
             users.append(user)
 
-        logging.info("Cross-referencing latest attendance poll...")
+        logger.info("Cross-referencing latest attendance poll...")
         update_msg += (
             "**Done**\n*Checking attendance poll to omit those who can't go...* "
         )
@@ -482,7 +493,7 @@ async def alertjobs(ctx):
             reaction_map["attdecline"] if "attdecline" in reaction_map else []
         )
 
-        logging.info("Omitting users who declined event: " + ", ".join(decline_tags))
+        logger.info("Omitting users who declined event: " + ", ".join(decline_tags))
         users = [_ for _ in users if f"{_.name}#{_.discriminator}" not in decline_tags]
 
         update_msg += "**Done**\n*Fetching users' jobs...* "
@@ -514,7 +525,8 @@ async def alertjobs(ctx):
             else:
                 try:
                     await user.send(
-                        "Reminder: You are signed up for the event tonight.\n" + msgs[user]
+                        "Reminder: You are signed up for the event tonight.\n"
+                        + msgs[user]
                     )
                     alerted_status[user] = "DONE"
                 except:
@@ -531,14 +543,18 @@ async def alertjobs(ctx):
         )
 
         comp_msg = await construct_joblist_message()
-        party_channel = discord.utils.get(bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID)
+        party_channel = discord.utils.get(
+            bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID
+        )
         if test:
             await ctx.send("The following job comp would be posted:\n" + comp_msg)
         else:
             await party_channel.send(comp_msg)
 
     except Exception as e:
-        logging.error(e)
+        logger.error(e)
+
+    logger.pop("alertjobs")
 
 
 @bot.command()
@@ -546,29 +562,51 @@ async def alertjobs(ctx):
 async def dyna(ctx):
     tokens = [token.lower() for token in ctx.message.content.split(" ")]
     if len(tokens) not in (2, 3):
-        return await ctx.send("Usage example: `!dyna WHM` or `!dyna BLU acc` or `!dyna COR -1`")
+        return await ctx.send(
+            "Usage example: `!dyna WHM` or `!dyna BLU acc` or `!dyna COR -1`"
+        )
 
-    job = tokens[1]    
-    choice_type = 'af' if len(tokens) != 3 else tokens[2]
-    valid_jobs = ('war', 'mnk', 'whm', 'blm', 'rdm', 'thf', 'pld', 'drk', 'bst',
-        'brd', 'rng', 'sam', 'nin', 'drg', 'smn', 'blu', 'cor', 'pup')
-    valid_choice_types = ('af', '-1', 'acc')
-    
+    job = tokens[1]
+    choice_type = "af" if len(tokens) != 3 else tokens[2]
+    valid_jobs = (
+        "war",
+        "mnk",
+        "whm",
+        "blm",
+        "rdm",
+        "thf",
+        "pld",
+        "drk",
+        "bst",
+        "brd",
+        "rng",
+        "sam",
+        "nin",
+        "drg",
+        "smn",
+        "blu",
+        "cor",
+        "pup",
+    )
+    valid_choice_types = ("af", "-1", "acc")
+
     if job not in valid_jobs:
         return await ctx.send("That is not a valid job.")
     elif choice_type not in valid_choice_types:
-        return await ctx.send("That is not a valid drop choice. Must be either af (default), -1, or acc.")
+        return await ctx.send(
+            "That is not a valid drop choice. Must be either af (default), -1, or acc."
+        )
 
     agc = await agcm.authorize()
     ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
     ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
 
-    msg = f'Loot List for **{job.upper()} [{choice_type.upper()}]**\n'
+    msg = f"Loot List for **{job.upper()} [{choice_type.upper()}]**\n"
     newline = "\n"
     tics = "```"
 
     character_name_values = await ws.col_values(1)
-    if choice_type == 'af':
+    if choice_type == "af":
         choice_one_got = await ws.col_values(2)
         choice_one = await ws.col_values(3)
         choice_two_got = await ws.col_values(4)
@@ -576,17 +614,29 @@ async def dyna(ctx):
         choice_other_got = await ws.col_values(6)
         choice_other = await ws.col_values(7)
 
-        who_ones = [character_name_values[i] for i,v in enumerate(choice_one) if job.lower() in v.lower() and choice_one_got[i] == 'FALSE']
-        who_twos = [character_name_values[i] for i,v in enumerate(choice_two) if job.lower() in v.lower() and choice_two_got[i] == 'FALSE']
-        who_others = [character_name_values[i] for i,v in enumerate(choice_other) if job.lower() in v.lower() and choice_other_got[i] == 'FALSE']
-        
+        who_ones = [
+            character_name_values[i]
+            for i, v in enumerate(choice_one)
+            if job.lower() in v.lower() and choice_one_got[i] == "FALSE"
+        ]
+        who_twos = [
+            character_name_values[i]
+            for i, v in enumerate(choice_two)
+            if job.lower() in v.lower() and choice_two_got[i] == "FALSE"
+        ]
+        who_others = [
+            character_name_values[i]
+            for i, v in enumerate(choice_other)
+            if job.lower() in v.lower() and choice_other_got[i] == "FALSE"
+        ]
+
         if who_ones or who_twos or who_others:
             msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
             msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
             msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
         else:
-            msg += '```\nFREE LOT```'
-        
+            msg += "```\nFREE LOT```"
+
         await ctx.send(msg)
     else:
         choice_minus_one_got = await ws.col_values(9)
@@ -597,147 +647,87 @@ async def dyna(ctx):
         choice_other = await ws.col_values(14)
 
         who_ones = None
-        if choice_type == '-1':
-            who_ones = [character_name_values[i] for i,v in enumerate(choice_minus_one) if job.lower() in v.lower() and choice_minus_one_got[i] == 'FALSE']
+        if choice_type == "-1":
+            who_ones = [
+                character_name_values[i]
+                for i, v in enumerate(choice_minus_one)
+                if job.lower() in v.lower() and choice_minus_one_got[i] == "FALSE"
+            ]
         else:
-            who_ones = [character_name_values[i] for i,v in enumerate(choice_acc) if job.lower() in v.lower() and choice_acc_got[i] == 'FALSE']
-        
-        mapping = str.maketrans('', '', ' ,."')
-        who_others = [character_name_values[i] for i,v in enumerate(choice_other) if f"{job}{choice_type}" in v.lower().translate(mapping) and choice_other_got[i] == 'FALSE']
+            who_ones = [
+                character_name_values[i]
+                for i, v in enumerate(choice_acc)
+                if job.lower() in v.lower() and choice_acc_got[i] == "FALSE"
+            ]
 
-        print([v.lower().translate(mapping) for i,v in enumerate(choice_other)])
+        mapping = str.maketrans("", "", ' ,."')
+        who_others = [
+            character_name_values[i]
+            for i, v in enumerate(choice_other)
+            if f"{job}{choice_type}" in v.lower().translate(mapping)
+            and choice_other_got[i] == "FALSE"
+        ]
+
+        print([v.lower().translate(mapping) for i, v in enumerate(choice_other)])
         if who_ones or who_others:
             msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
             msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
         else:
-            msg += '```\nFREE LOT```'
-        
+            msg += "```\nFREE LOT```"
+
         await ctx.send(msg)
 
 
 @bot.command()
 @sheets_access
-async def wishlist(ctx, link=None):
-    from loot_mappings import DYNAMIS_MAIN, DYNAMIS_ALT, SKY_MAIN, SKY_ALT, SEA_MAIN, SEA_ALT, LIMBUS_MAIN, LIMBUS_ALT
-    logging.info("Wishlist request initiated.")
-    
-    logging.info("  Authorizing Google Sheets...")
+async def sync(ctx, link=None):
+    logger.push("sync")
+    logger.info("Wishlist request initiated.").add()
+
+    logger.info("Authorizing Google Sheets...")
     agc = await agcm.authorize()
     council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
-    
-    async def fetch_wishlist_url(author):
-        author_id = f'{ctx.author.name}#{ctx.author.discriminator}'.lower()
-        logging.info(f"  Fetching wishlist URL for {author_id}")
 
-        wishlist_lookups = await council_ss.worksheet('Wishlist Submissions')
+    async def fetch_wishlist_url(author):
+        author_id = f"{ctx.author.name}#{ctx.author.discriminator}".lower()
+        logger.info(f"Fetching wishlist URL for {author_id}")
+
+        wishlist_lookups = await council_ss.worksheet("Wishlist Submissions")
 
         discord_ids = [_.lower() for _ in await wishlist_lookups.col_values(4)]
         discord_id_index = discord_ids.index(author_id) + 1
-        wishlist_url = (await wishlist_lookups.get_values(f'E{discord_id_index}'))[0][0]
+        wishlist_url = (await wishlist_lookups.get_values(f"E{discord_id_index}"))[0][0]
         return wishlist_url
 
     wishlist_url = None
     try:
         if not link:
             wishlist_url = await fetch_wishlist_url(ctx.author)
-        elif link == 'link':
+        elif link == "link":
             # Special case: "!wishlist link" --> Get a link to the requester's wishlist.
             wishlist_url = await fetch_wishlist_url(ctx.author)
             return await ctx.send(f"Your wishlist link: {wishlist_url}")
         else:
             wishlist_url = link
     except Exception as e:
-        logging.error(e)
-        return await ctx.send("ERROR: Check with council to make sure your wishlist is registered.")
+        logger.error(e)
+        return await ctx.send(
+            "ERROR: Check with council to make sure your wishlist is registered."
+        )
 
-    
     update_msg = "Syncing wishlist with council's sheet... "
     message = await ctx.send(update_msg)
 
-    logging.info("  Fetching wishlist sheet reference...")
+    logger.info("Fetching wishlist sheet reference...")
     wishlist_ss = None
     try:
         wishlist_ss = await agc.open_by_url(wishlist_url)
     except Exception as e:
-        logging.error(e)
+        logger.error(e)
         return await ctx.send("ERROR: Wishlist URL is not valid.")
-    
-    logging.info("  Fetching council worksheet references...")
-    council_dynamis_ws = await council_ss.worksheet('Dynamis Wishlists')
-    council_sky_ws = await council_ss.worksheet('Sky Requests')
-    council_sea_ws = await council_ss.worksheet('Sea Requests')
-    council_limbus_ws = await council_ss.worksheet('Limbus Requests')
 
-    logging.info("  Looking up character names for wishlist sync...")
-    charname_main = None
-    charname_alt = None
-    try:
-        charname_main = (await wishlist_ss.values_get('INSTRUCTIONS!D2'))['values'][0][0].lower().strip()
-        charname_alt = (await wishlist_ss.values_get('INSTRUCTIONS!F2'))['values'][0][0].lower().strip()
-    except Exception as e:
-        pass
-
-    if not charname_main:
-        logging.error("Character names are not filled out!")
-        return await ctx.author.send("Your wishlist doesn't seem to have your character names filled in.")
-
-    logging.info(f"  Syncing wishlist items for {charname_main}{' and ' + charname_alt if charname_alt else ''}...")
-
-    async def push_wishlist_updates(charname, mapping, wishlist_ss, council_ws):
-        dest = next(iter(mapping))
-        dest = dest[:dest.index('!')]
-        logging.info(f'    {charname}: pulling from {dest}')
-        charname_col_values = [_.lower() for _ in await council_ws.col_values(1)]
-        
-        row_index = None
-        try:
-            row_index = charname_col_values.index(charname) + 1
-        except:
-            logging.warning(f"    Could not find {charname} in {council_ws}")
-            return
-
-        batch_gets = list(mapping.keys())
-        items_to_push = await wishlist_ss.values_batch_get(ranges=batch_gets)
-    
-        logging.info(f'    {charname}: pushing to council sheet {council_ws.title}')
-        batch_updates = []
-        batch_clears = []
-        for item in items_to_push['valueRanges']:
-            destination = mapping[item['range']] + str(row_index)
-            if 'values' in item:
-                batch_updates.append({"range": destination, "values": item['values']})
-            else:
-                batch_clears.append(destination)
-            
-        await council_ws.batch_clear(batch_clears)
-        return await council_ws.batch_update(batch_updates)
-
-    dynamis_megadict_main = {k: v for d in DYNAMIS_MAIN for k, v in d.items()}
-    dynamis_megadict_alt = {k: v for d in DYNAMIS_ALT for k, v in d.items()}
-        
-    try:
-        # Main
-        await push_wishlist_updates(charname_main, dynamis_megadict_main, wishlist_ss, council_dynamis_ws)
-        await push_wishlist_updates(charname_main, SKY_MAIN, wishlist_ss, council_sky_ws)
-        await push_wishlist_updates(charname_main, SEA_MAIN, wishlist_ss, council_sea_ws)
-        await push_wishlist_updates(charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws)
-
-        # Alt
-        if charname_alt:
-            await push_wishlist_updates(charname_alt, dynamis_megadict_alt, wishlist_ss, council_dynamis_ws)
-            await push_wishlist_updates(charname_alt, SKY_ALT, wishlist_ss, council_sky_ws)
-            await push_wishlist_updates(charname_alt, SEA_ALT, wishlist_ss, council_sea_ws)
-            await push_wishlist_updates(charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws)
-    except Exception as e:
-        logging.error(e)
-
-
-    # TODO: clean this up
-    wishlist_lookups = await council_ss.worksheet('Wishlist Submissions')
-    charnames = [_.lower() for _ in (await wishlist_lookups.col_values(1))]
-    update_index = charnames.index(charname_main.lower()) + 1
-    await wishlist_lookups.update_acell(f'C{update_index}', str(datetime.datetime.now()))
-    logging.info("Done!")
+    await _sync_apply(wishlist_ss, council_ss)
+    logger.pop("sync")
     return await message.edit(content=update_msg + "**Done!**")
 
 
@@ -745,16 +735,211 @@ async def wishlist(ctx, link=None):
 @commands.check(check_user_is_council_or_dev)
 async def kys(ctx):
     import os, sys
-    await ctx.send('💀 byebye...')
+
+    await ctx.send("💀 byebye...")
     try:
-        os.execv(sys.executable, ['python'] + sys.argv)
+        os.execv(sys.executable, ["python"] + sys.argv)
     except Exception as e:
-        logging.error("Exception " + str(e))
+        logger.error("Exception " + str(e))
+
+
+@sheets_access
+@tasks.loop(hours=1.0)
+async def sync_wishlists():
+    logger.push("sync_wishlists")
+    logger.info("Syncing all wishlists...").add()
+    logger.info("Force-pulling an access token for google drive metadata lookups...")
+
+    import google.auth.transport.requests
+    import aiohttp
+
+    agc = await agcm.authorize()
+    request = google.auth.transport.requests.Request()
+    agc.gc.auth.refresh(request)
+    drive_access_token = "Bearer " + agc.gc.auth.token
+
+    council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
+    logger.info("Pulling links and timestamps...")
+    wishlist_ws = await council_ss.worksheet("Wishlist Submissions")
+    wishlist_timestamps = await wishlist_ws.col_values(3)
+    wishlist_urls = await wishlist_ws.col_values(5)
+    hiatus_markers = await wishlist_ws.col_values(6)
+    logger.info("Comparing update timestamps...").add()
+
+    async with aiohttp.ClientSession(
+        headers={"Authorization": drive_access_token}
+    ) as session:
+        for i in range(1, len(wishlist_urls)):
+            wishlist_url = wishlist_urls[i]
+            if hiatus_markers[i] == "TRUE":
+                continue
+
+            if not wishlist_url:
+                continue
+
+            ss_id = None
+            try:
+                ss_id = (
+                    re.compile(
+                        r".+docs.google.com\/spreadsheets\/d\/(.+?)\/?(?:\/.+)?$"
+                    )
+                    .match(wishlist_url)
+                    .group(1)
+                )
+            except Exception as e:
+                logger.error(f"Invalid URL: " + wishlist_url)
+                continue
+
+            async with session.get(
+                f"https://www.googleapis.com/drive/v3/files/{ss_id}?supportsAllDrives=true&fields=name,modifiedTime"
+            ) as resp:
+                wishlist_metadata = await resp.json()
+
+                mod_str = wishlist_metadata["modifiedTime"]
+                upd_str = wishlist_timestamps[i]
+                ss_name = wishlist_metadata["name"]
+                if not upd_str:
+                    logger.info(f"{ss_name} has never been updated. Updating...")
+                    wishlist_ss = await agc.open_by_url(wishlist_url)
+                    await _sync_apply(wishlist_ss, council_ss)
+                elif arrow.get(mod_str) > arrow.get(upd_str):
+                    delta = arrow.get(mod_str) - arrow.get(upd_str)
+                    delta_str = (
+                        f"{delta.days} days ago"
+                        if delta.days
+                        else f"{delta.seconds} seconds ago"
+                    )
+                    logger.info(f"{ss_name} is out of date ({delta_str}). Updating...")
+                    wishlist_ss = await agc.open_by_url(wishlist_url)
+                    await _sync_apply(wishlist_ss, council_ss)
+
+    logger.pop("sync_wishlists")
+
+
+async def _sync_apply(wishlist_ss, council_ss):
+    from loot_mappings import (
+        DYNAMIS_MAIN,
+        DYNAMIS_ALT,
+        SKY_MAIN,
+        SKY_ALT,
+        SEA_MAIN,
+        SEA_ALT,
+        LIMBUS_MAIN,
+        LIMBUS_ALT,
+    )
+
+    logger.add()
+    logger.info(f"Applying wishlist sync for {wishlist_ss.title}...")
+    council_dynamis_ws = await council_ss.worksheet("Dynamis Wishlists")
+    council_sky_ws = await council_ss.worksheet("Sky Requests")
+    council_sea_ws = await council_ss.worksheet("Sea Requests")
+    council_limbus_ws = await council_ss.worksheet("Limbus Requests")
+
+    logger.info("Looking up character names for wishlist sync...")
+    charname_main = None
+    charname_alt = None
+    try:
+        charname_main = (
+            (await wishlist_ss.values_get("INSTRUCTIONS!D2"))["values"][0][0]
+            .lower()
+            .strip()
+        )
+        charname_alt = (
+            (await wishlist_ss.values_get("INSTRUCTIONS!F2"))["values"][0][0]
+            .lower()
+            .strip()
+        )
+    except Exception as e:
+        pass
+
+    if not charname_main:
+        logger.error("Character names are not filled out!").sub()
+        return
+
+    logger.info(
+        f"  Syncing wishlist items for {charname_main}{' and ' + charname_alt if charname_alt else ''}..."
+    )
+
+    async def push_wishlist_updates(charname, mapping, wishlist_ss, council_ws):
+        dest = next(iter(mapping))
+        dest = dest[: dest.index("!")]
+        logger.add()
+        logger.info(f"{charname}: pulling from {dest}")
+        charname_col_values = [_.lower() for _ in await council_ws.col_values(1)]
+
+        row_index = None
+        try:
+            row_index = charname_col_values.index(charname) + 1
+        except:
+            logger.warning(f"Could not find {charname} in {council_ws}")
+            logger.sub()
+            return
+
+        batch_gets = list(mapping.keys())
+        items_to_push = await wishlist_ss.values_batch_get(ranges=batch_gets)
+
+        logger.info(f"{charname}: pushing to council sheet {council_ws.title}")
+        batch_updates = []
+        batch_clears = []
+        for item in items_to_push["valueRanges"]:
+            destination = mapping[item["range"]] + str(row_index)
+            if "values" in item:
+                batch_updates.append({"range": destination, "values": item["values"]})
+            else:
+                batch_clears.append(destination)
+
+        await council_ws.batch_clear(batch_clears)
+        logger.sub()
+        return await council_ws.batch_update(batch_updates)
+
+    dynamis_megadict_main = {k: v for d in DYNAMIS_MAIN for k, v in d.items()}
+    dynamis_megadict_alt = {k: v for d in DYNAMIS_ALT for k, v in d.items()}
+
+    try:
+        # Main
+        await push_wishlist_updates(
+            charname_main, dynamis_megadict_main, wishlist_ss, council_dynamis_ws
+        )
+        await push_wishlist_updates(
+            charname_main, SKY_MAIN, wishlist_ss, council_sky_ws
+        )
+        await push_wishlist_updates(
+            charname_main, SEA_MAIN, wishlist_ss, council_sea_ws
+        )
+        await push_wishlist_updates(
+            charname_main, LIMBUS_MAIN, wishlist_ss, council_limbus_ws
+        )
+
+        # Alt
+        if charname_alt:
+            await push_wishlist_updates(
+                charname_alt, dynamis_megadict_alt, wishlist_ss, council_dynamis_ws
+            )
+            await push_wishlist_updates(
+                charname_alt, SKY_ALT, wishlist_ss, council_sky_ws
+            )
+            await push_wishlist_updates(
+                charname_alt, SEA_ALT, wishlist_ss, council_sea_ws
+            )
+            await push_wishlist_updates(
+                charname_alt, LIMBUS_ALT, wishlist_ss, council_limbus_ws
+            )
+    except Exception as e:
+        logger.error(e)
+
+    # TODO: clean this up
+    wishlist_lookups = await council_ss.worksheet("Wishlist Submissions")
+    charnames = [_.lower() for _ in (await wishlist_lookups.col_values(1))]
+    update_index = charnames.index(charname_main.lower()) + 1
+    await wishlist_lookups.update_acell(f"C{update_index}", str(arrow.utcnow()))
+    logger.info("Done!").sub()
+    return
 
 
 @bot.event
 async def on_ready():
-    logging.info("Bot is ready!")
+    logger.info("Bot is ready!")
+    await sync_wishlists.start()
 
 
 bot.run(BOT_TOKEN)

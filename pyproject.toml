@@ -8,10 +8,11 @@ authors = ["Eitan Romanoff <eitan.romanoff@gmail.com>"]
 python = "^3.8"
 "discord.py" = { git = "https://github.com/Rapptz/discord.py.git", branch = "master" }
 PyYAML = "^6.0"
-pygsheets = {git = "git@github.com:nithinmurali/pygsheets.git"}
 google-auth-oauthlib = "^0.7.1"
 asgiref = "^3.5.0"
-gspread-asyncio = "^1.8.0"
+gspread-asyncio = "^1.8.1"
+arrow = "^1.2.3"
+python_log_indenter = "^0.9"
 
 [tool.poetry.dev-dependencies]
 
