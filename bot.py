@@ -679,6 +679,11 @@ async def dyna(ctx):
 
 
 @bot.command()
+async def wishlist(ctx):
+    return await sync(ctx, link="link")
+
+
+@bot.command()
 @sheets_access
 async def sync(ctx, link=None):
     logger.push("sync")
@@ -706,7 +711,7 @@ async def sync(ctx, link=None):
         elif link == "link":
             # Special case: "!wishlist link" --> Get a link to the requester's wishlist.
             wishlist_url = await fetch_wishlist_url(ctx.author)
-            return await ctx.send(f"Your wishlist link: {wishlist_url}")
+            return await ctx.author.send(f"Your wishlist link: {wishlist_url}")
         else:
             wishlist_url = link
     except Exception as e:
