@@ -407,7 +407,6 @@ async def bug(ctx):
 
 
 @bot.command()
-@commands.check(check_channel_is_dm)
 async def changelog(ctx):
     num_commits = 3
     version_content = subprocess.check_output(
