@@ -972,7 +972,7 @@ async def _sync_apply(wishlist_ss, council_ss):
 
 @bot.listen()
 async def on_ready():
-    # sync_wishlists.start()
+    sync_wishlists.start()
     logging.info("Bot is ready!")
 
 
