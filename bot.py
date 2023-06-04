@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 
+import traceback
 import re
 import subprocess
 import argparse
@@ -96,6 +97,8 @@ def get_creds():
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 PROBOT_ID = int(config["probot_id"])
+
+REGISTERED_DYNAMIS_ZONE = None
 
 
 def shared_max_concurrency():
@@ -560,122 +563,156 @@ async def alertjobs(ctx):
 @bot.command()
 @sheets_access
 async def dyna(ctx):
-    tokens = [token.lower() for token in ctx.message.content.split(" ")]
-    if len(tokens) not in (2, 3):
-        return await ctx.send(
-            "Usage example: `!dyna WHM` or `!dyna BLU acc` or `!dyna COR -1`"
+    global REGISTERED_DYNAMIS_ZONE
+    try:
+        zone_anchors = {
+            "bastok": 2,
+            "jeuno": 6,
+            "sandy": 10,
+            "windy": 14,
+            "beau": 18,
+            "xarc": 22,
+            "bubu": 27,
+            "qufim": 36,
+            "valkurm": 45,
+            "tavnazia": 54,
+        }
+        invalid_zone_msg = f"Zone must be registered to one of the following zones. ```{', '.join(zone_anchors)}``` For example... ```!dyna zone jeuno```"
+
+        tokens = [token.lower() for token in ctx.message.content.split(" ")]
+        if len(tokens) not in (2, 3):
+            return await ctx.send(
+                "Usage example: `!dyna WHM` or `!dyna BLU acc` or `!dyna COR -1`"
+            )
+
+        if tokens[1].lower() == "zone" and len(tokens) >= 3:
+            if tokens[2].lower() not in zone_anchors:
+                return await ctx.send(invalid_zone_msg)
+            else:
+                REGISTERED_DYNAMIS_ZONE = tokens[2].lower()
+                return await ctx.send(
+                    f"Current dynamis zone set to: `{REGISTERED_DYNAMIS_ZONE}`"
+                )
+        elif not REGISTERED_DYNAMIS_ZONE:
+            return await ctx.send(invalid_zone_msg)
+
+        job = tokens[1]
+        choice_type = "af" if len(tokens) != 3 else tokens[2]
+        valid_jobs = (
+            "war",
+            "mnk",
+            "whm",
+            "blm",
+            "rdm",
+            "thf",
+            "pld",
+            "drk",
+            "bst",
+            "brd",
+            "rng",
+            "sam",
+            "nin",
+            "drg",
+            "smn",
+            "blu",
+            "cor",
+            "pup",
         )
+        valid_choice_types = ("af", "-1", "acc")
 
-    job = tokens[1]
-    choice_type = "af" if len(tokens) != 3 else tokens[2]
-    valid_jobs = (
-        "war",
-        "mnk",
-        "whm",
-        "blm",
-        "rdm",
-        "thf",
-        "pld",
-        "drk",
-        "bst",
-        "brd",
-        "rng",
-        "sam",
-        "nin",
-        "drg",
-        "smn",
-        "blu",
-        "cor",
-        "pup",
-    )
-    valid_choice_types = ("af", "-1", "acc")
+        if job not in valid_jobs:
+            return await ctx.send("That is not a valid job.")
+        elif choice_type not in valid_choice_types:
+            return await ctx.send(
+                "That is not a valid drop choice. Must be either af (default), -1, or acc."
+            )
 
-    if job not in valid_jobs:
-        return await ctx.send("That is not a valid job.")
-    elif choice_type not in valid_choice_types:
-        return await ctx.send(
-            "That is not a valid drop choice. Must be either af (default), -1, or acc."
-        )
+        agc = await agcm.authorize()
+        ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
+        ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
 
-    agc = await agcm.authorize()
-    ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
-    ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
+        msg = f"Loot List for **{job.upper()} [{choice_type.upper()}]**\n"
+        newline = "\n"
+        tics = "```"
 
-    msg = f"Loot List for **{job.upper()} [{choice_type.upper()}]**\n"
-    newline = "\n"
-    tics = "```"
+        choice_one_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 1
+        choice_two_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 2
+        choice_other_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 3
+        choice_minus_one_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 4
+        choice_acc_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 6
+        choice_acc_other_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 8
 
-    character_name_values = await ws.col_values(1)
-    if choice_type == "af":
-        choice_one_got = await ws.col_values(2)
-        choice_one = await ws.col_values(3)
-        choice_two_got = await ws.col_values(4)
-        choice_two = await ws.col_values(5)
-        choice_other_got = await ws.col_values(6)
-        choice_other = await ws.col_values(7)
+        character_name_values = await ws.col_values(1)
+        if choice_type == "af":
+            choice_one = await ws.col_values(choice_one_index)
+            choice_two = await ws.col_values(choice_two_index)
+            choice_other = await ws.col_values(choice_other_index)
 
-        who_ones = [
-            character_name_values[i]
-            for i, v in enumerate(choice_one)
-            if job.lower() in v.lower() and choice_one_got[i] == "FALSE"
-        ]
-        who_twos = [
-            character_name_values[i]
-            for i, v in enumerate(choice_two)
-            if job.lower() in v.lower() and choice_two_got[i] == "FALSE"
-        ]
-        who_others = [
-            character_name_values[i]
-            for i, v in enumerate(choice_other)
-            if job.lower() in v.lower() and choice_other_got[i] == "FALSE"
-        ]
-
-        if who_ones or who_twos or who_others:
-            msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
-            msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
-            msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
-        else:
-            msg += "```\nFREE LOT```"
-
-        await ctx.send(msg)
-    else:
-        choice_minus_one_got = await ws.col_values(9)
-        choice_minus_one = await ws.col_values(10)
-        choice_acc_got = await ws.col_values(11)
-        choice_acc = await ws.col_values(12)
-        choice_other_got = await ws.col_values(13)
-        choice_other = await ws.col_values(14)
-
-        who_ones = None
-        if choice_type == "-1":
+            logging.info(character_name_values)
             who_ones = [
                 character_name_values[i]
-                for i, v in enumerate(choice_minus_one)
-                if job.lower() in v.lower() and choice_minus_one_got[i] == "FALSE"
+                for i, v in enumerate(choice_one)
+                if job.lower() in v.lower()
             ]
-        else:
-            who_ones = [
+            who_twos = [
                 character_name_values[i]
-                for i, v in enumerate(choice_acc)
-                if job.lower() in v.lower() and choice_acc_got[i] == "FALSE"
+                for i, v in enumerate(choice_two)
+                if job.lower() in v.lower()
+            ]
+            who_others = [
+                character_name_values[i]
+                for i, v in enumerate(choice_other)
+                if job.lower() in v.lower()
             ]
 
-        mapping = str.maketrans("", "", ' ,."')
-        who_others = [
-            character_name_values[i]
-            for i, v in enumerate(choice_other)
-            if f"{job}{choice_type}" in v.lower().translate(mapping)
-            and choice_other_got[i] == "FALSE"
-        ]
+            if who_ones or who_twos or who_others:
+                msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
+                msg += f'**Second Choice**{(tics + newline + newline.join(who_twos) + tics) if who_twos else "``` ```"}'
+                msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+            else:
+                msg += "```\nFREE LOT```"
 
-        print([v.lower().translate(mapping) for i, v in enumerate(choice_other)])
-        if who_ones or who_others:
-            msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
-            msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+            await ctx.send(msg)
         else:
-            msg += "```\nFREE LOT```"
+            if REGISTERED_DYNAMIS_ZONE not in ("bubu", "qufim", "valkurm", "tavnazia"):
+                return await ctx.send(
+                    "Current dynamis zone must be a dreamlands zone to do that."
+                )
+            choice_minus_one = await ws.col_values(choice_minus_one_index)
+            choice_acc = await ws.col_values(choice_acc_index)
+            choice_other = await ws.col_values(choice_acc_other_index)
 
-        await ctx.send(msg)
+            who_ones = None
+            if choice_type == "-1":
+                who_ones = [
+                    character_name_values[i]
+                    for i, v in enumerate(choice_minus_one)
+                    if job.lower() in v.lower()
+                ]
+            else:
+                who_ones = [
+                    character_name_values[i]
+                    for i, v in enumerate(choice_acc)
+                    if job.lower() in v.lower()
+                ]
+
+            mapping = str.maketrans("", "", ' ,."')
+            who_others = [
+                character_name_values[i]
+                for i, v in enumerate(choice_other)
+                if f"{job}{choice_type}" in v.lower().translate(mapping)
+            ]
+
+            print([v.lower().translate(mapping) for i, v in enumerate(choice_other)])
+            if who_ones or who_others:
+                msg += f'**First Choice**{(tics + newline + newline.join(who_ones) + tics) if who_ones else "``` ```"}'
+                msg += f'**Other**{(tics + newline + newline.join(who_others) + tics) if who_others else "``` ```"}'
+            else:
+                msg += "```\nFREE LOT```"
+
+            await ctx.send(msg)
+    except Exception as e:
+        logging.error(traceback.format_exc())
 
 
 @bot.command()
@@ -933,10 +970,10 @@ async def _sync_apply(wishlist_ss, council_ss):
     return
 
 
-@bot.event
+@bot.listen()
 async def on_ready():
+    # sync_wishlists.start()
     logging.info("Bot is ready!")
-    await sync_wishlists.start()
 
 
 bot.run(BOT_TOKEN)
