@@ -9,6 +9,7 @@ import yaml
 import logging
 import arrow
 
+import enlighten
 import asyncio
 import gspread_asyncio
 
@@ -176,9 +177,7 @@ async def att_poll_reactions(last_poll_message):
         async for user in reaction.users():
             if user.id == PROBOT_ID:
                 continue
-            reaction_map[reaction.emoji.name].append(
-                f"{user.name}#{user.discriminator}"
-            )
+            reaction_map[reaction.emoji.name].append(str(user))
 
     return reaction_map
 
@@ -277,35 +276,33 @@ async def job(ctx):
         )
 
 
-@bot.command()
-@commands.check(check_channel_is_dm)
-@sheets_access
-async def test(ctx):
-    return await ctx.send("testing...")
-
-
 async def get_char_names_for_users(users):
     agc = await agcm.authorize()
-    roster_ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
-    roster_ws = await roster_ss.worksheet(ROSTER_SHEET_NAME)
+    council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
+    roster_ws = await council_ss.worksheet("Wishlist Submissions")
 
-    logging.info("Fetching character names...")
-    logging.info("Pulling discord tags col from sheet...")
-    col_values = await roster_ws.col_values(2)
+    logging.info("Mapping discord user to character names...")
 
-    logging.info("Mapping discord user to rows in roster sheet...")
+    col_values = await roster_ws.col_values(4)
     row_indexes = {}
     for user in users:
-        account_id = f"{user.name}#{user.discriminator}"
-        row_indexes[user.id] = [i for i, x in enumerate(col_values) if x == account_id][
+        row_indexes[user.id] = [i for i, x in enumerate(col_values) if x == str(user)][
             :2
         ]
 
     name_map = {}
+    wants_alerts_but_not_on_roster = []
+    manager = enlighten.get_manager()
+    pbar = manager.counter(
+        total=len(users),
+        desc="Mapping discord users to character names...",
+        unit="users",
+    )
+
     for user in users:
-        logging.info(f"Populating name map for {user}")
+        pbar.update()
         if not row_indexes[user.id]:
-            logging.warning(f"Cannot locate {user} on the roster sheet")
+            wants_alerts_but_not_on_roster.append(user)
             continue
 
         user_row_indexes = row_indexes[user.id]
@@ -319,7 +316,6 @@ async def get_char_names_for_users(users):
 
         name_map[user] = {"main": character_name, "alt": alt_name}
 
-    logging.info("Done fetching character names!")
     return name_map
 
 
@@ -340,8 +336,14 @@ async def _job(users):
     col_values = await party_ws.col_values(2)
     logging.info(col_values)
 
+    manager = enlighten.get_manager()
+    pbar = manager.counter(
+        total=len(users),
+        desc="Checking character assignments...",
+        unit="users",
+    )
     for user in users:
-        logging.info(f"Checking character assignments for {user}...")
+        pbar.update()
         if user not in character_names:
             logging.info(
                 f"{user} was not found in the roster. Double-check that they are on it."
@@ -361,7 +363,6 @@ async def _job(users):
                 main_assigned = True
                 on_sheet = True
         except Exception as e:
-            logging.error(e)
             pass
 
         try:
@@ -372,7 +373,6 @@ async def _job(users):
                 alt_assigned = True
                 on_sheet = True
         except Exception as e:
-            logging.error(e)
             pass
 
         if on_sheet:
@@ -476,9 +476,7 @@ async def alertjobs(ctx):
 
             user_alert_section = "```"
             for user in alerted_status:
-                user_alert_section += (
-                    f"{user.name}#{user.discriminator} - {alerted_status[user]}\n"
-                )
+                user_alert_section += f"{str(user)} - {alerted_status[user]}\n"
             user_alert_section += "```"
             return user_alert_section
 
@@ -498,7 +496,7 @@ async def alertjobs(ctx):
         )
 
         logging.info("Omitting users who declined event: " + ", ".join(decline_tags))
-        users = [_ for _ in users if f"{_.name}#{_.discriminator}" not in decline_tags]
+        users = [_ for _ in users if str(_) not in decline_tags]
 
         update_msg += "**Done**\n*Fetching users' jobs...* "
         await message.edit(content=update_msg)
@@ -519,7 +517,7 @@ async def alertjobs(ctx):
         for user in users:
             if user not in msgs:
                 await ctx.send(
-                    f"{user.name}#{user.discriminator} wasn't found in the roster. Double-check that they are added."
+                    f"{str(user)} wasn't found in the roster. Double-check that they are added."
                 )
                 alerted_status[user] = "FAILED"
             elif test:
@@ -729,7 +727,7 @@ async def sync(ctx, link=None):
     council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
 
     async def fetch_wishlist_url(author):
-        author_id = f"{ctx.author.name}#{ctx.author.discriminator}".lower()
+        author_id = str(author).lower()
         logging.info(f"Fetching wishlist URL for {author_id}")
 
         wishlist_lookups = await council_ss.worksheet("Wishlist Submissions")
@@ -971,7 +969,7 @@ async def _sync_apply(wishlist_ss, council_ss):
 
 @bot.listen()
 async def on_ready():
-    sync_wishlists.start()
+    # sync_wishlists.start()
     logging.info("Bot is ready!")
 
 

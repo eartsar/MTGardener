@@ -13,6 +13,7 @@ asgiref = "^3.5.0"
 gspread-asyncio = "^1.8.1"
 arrow = "^1.2.3"
 python_log_indenter = "^0.9"
+enlighten = "1.11.2"
 
 [tool.poetry.dev-dependencies]
 
