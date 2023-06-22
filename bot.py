@@ -286,9 +286,7 @@ async def get_char_names_for_users(users):
     col_values = await roster_ws.col_values(4)
     row_indexes = {}
     for user in users:
-        row_indexes[user.id] = [i for i, x in enumerate(col_values) if x == str(user)][
-            :2
-        ]
+        row_indexes[user.id] = col_values.index(str(user))
 
     name_map = {}
     wants_alerts_but_not_on_roster = []
@@ -305,14 +303,13 @@ async def get_char_names_for_users(users):
             wants_alerts_but_not_on_roster.append(user)
             continue
 
-        user_row_indexes = row_indexes[user.id]
-        character_name_cell = await roster_ws.acell(f"A{user_row_indexes[0] + 1}")
+        user_row_index = row_indexes[user.id]
+        character_name_cell = await roster_ws.acell(f"A{user_row_index + 1}")
         character_name = character_name_cell.value
 
         alt_name = None
-        if len(user_row_indexes) > 1:
-            alt_name_cell = await roster_ws.acell(f"A{user_row_indexes[1] + 1}")
-            alt_name = alt_name_cell.value
+        alt_name_cell = await roster_ws.acell(f"B{user_row_index + 1}")
+        alt_name = alt_name_cell.value if alt_name_cell.value else None
 
         name_map[user] = {"main": character_name, "alt": alt_name}
 
@@ -324,6 +321,7 @@ async def _job(users):
     character_names = {}
     try:
         character_names = await get_char_names_for_users(users)
+        logging.info(str(character_names))
     except Exception as e:
         logging.error(f"Something went wrong when trying to get the roster. {e}")
         return msgs
