@@ -286,10 +286,16 @@ async def get_char_names_for_users(users):
     col_values = await roster_ws.col_values(4)
     row_indexes = {}
     for user in users:
-        row_indexes[user.id] = col_values.index(str(user))
+        try:
+            row_indexes[user.id] = col_values.index(str(user))
+        except Exception as e:
+            logging.error("User signed up for alerts but not on council sheet", e)
+            row_indexes[user.id] = None
+
+    filtered_users = [user for user in users if row_indexes[user.id]]
+    users = filtered_users
 
     name_map = {}
-    wants_alerts_but_not_on_roster = []
     manager = enlighten.get_manager()
     pbar = manager.counter(
         total=len(users),
@@ -297,10 +303,9 @@ async def get_char_names_for_users(users):
         unit="users",
     )
 
-    for user in users:
+    for user in filtered_users:
         pbar.update()
         if not row_indexes[user.id]:
-            wants_alerts_but_not_on_roster.append(user)
             continue
 
         user_row_index = row_indexes[user.id]
@@ -967,7 +972,7 @@ async def _sync_apply(wishlist_ss, council_ss):
 
 @bot.listen()
 async def on_ready():
-    # sync_wishlists.start()
+    sync_wishlists.start()
     logging.info("Bot is ready!")
 
 
