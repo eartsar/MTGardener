@@ -289,7 +289,7 @@ async def get_char_names_for_users(users):
         try:
             row_indexes[user.id] = col_values.index(str(user))
         except Exception as e:
-            logging.error("User signed up for alerts but not on council sheet", e)
+            logging.error(f"{user} signed up for alerts but not on council sheet")
             row_indexes[user.id] = None
 
     filtered_users = [user for user in users if row_indexes[user.id]]
