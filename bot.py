@@ -8,6 +8,9 @@ import argparse
 import yaml
 import logging
 import arrow
+from datetime import datetime
+import parsedatetime
+import time
 
 import enlighten
 import asyncio
@@ -793,65 +796,72 @@ async def sync_wishlists():
     import google.auth.transport.requests
     import aiohttp
 
-    agc = await agcm.authorize()
-    request = google.auth.transport.requests.Request()
-    agc.gc.auth.refresh(request)
-    drive_access_token = "Bearer " + agc.gc.auth.token
+    try:
+        agc = await agcm.authorize()
+        request = google.auth.transport.requests.Request()
+        agc.gc.auth.refresh(request)
+        drive_access_token = "Bearer " + agc.gc.auth.token
 
-    council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
-    logging.info("Pulling links and timestamps...")
-    wishlist_ws = await council_ss.worksheet("Wishlist Submissions")
-    wishlist_timestamps = await wishlist_ws.col_values(3)
-    wishlist_urls = await wishlist_ws.col_values(5)
-    hiatus_markers = await wishlist_ws.col_values(6)
-    logging.info("Comparing update timestamps...")
+        council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
+        logging.info("Pulling links and timestamps...")
+        wishlist_ws = await council_ss.worksheet("Wishlist Submissions")
+        wishlist_timestamps = await wishlist_ws.col_values(3)
+        wishlist_urls = await wishlist_ws.col_values(5)
+        hiatus_markers = await wishlist_ws.col_values(6)
+        logging.info("Comparing update timestamps...")
 
-    async with aiohttp.ClientSession(
-        headers={"Authorization": drive_access_token}
-    ) as session:
-        for i in range(1, len(wishlist_urls)):
-            wishlist_url = wishlist_urls[i]
-            if hiatus_markers[i] == "TRUE":
-                continue
+        async with aiohttp.ClientSession(
+            headers={"Authorization": drive_access_token}
+        ) as session:
+            for i in range(1, len(wishlist_urls)):
+                wishlist_url = wishlist_urls[i]
+                if hiatus_markers[i] == "TRUE":
+                    continue
 
-            if not wishlist_url:
-                continue
+                if not wishlist_url:
+                    continue
 
-            ss_id = None
-            try:
-                ss_id = (
-                    re.compile(
-                        r".+docs.google.com\/spreadsheets\/d\/(.+?)\/?(?:\/.+)?$"
+                ss_id = None
+                try:
+                    ss_id = (
+                        re.compile(
+                            r".+docs.google.com\/spreadsheets\/d\/(.+?)\/?(?:\/.+)?$"
+                        )
+                        .match(wishlist_url)
+                        .group(1)
                     )
-                    .match(wishlist_url)
-                    .group(1)
-                )
-            except Exception as e:
-                logging.error(f"Invalid URL: " + wishlist_url)
-                continue
+                except Exception as e:
+                    logging.error(f"Invalid URL: " + wishlist_url)
+                    continue
 
-            async with session.get(
-                f"https://www.googleapis.com/drive/v3/files/{ss_id}?supportsAllDrives=true&fields=name,modifiedTime"
-            ) as resp:
-                wishlist_metadata = await resp.json()
+                async with session.get(
+                    f"https://www.googleapis.com/drive/v3/files/{ss_id}?supportsAllDrives=true&fields=name,modifiedTime"
+                ) as resp:
+                    wishlist_metadata = await resp.json()
 
-                mod_str = wishlist_metadata["modifiedTime"]
-                upd_str = wishlist_timestamps[i]
-                ss_name = wishlist_metadata["name"]
-                if not upd_str:
-                    logging.info(f"{ss_name} has never been updated. Updating...")
-                    wishlist_ss = await agc.open_by_url(wishlist_url)
-                    await _sync_apply(wishlist_ss, council_ss)
-                elif arrow.get(mod_str) > arrow.get(upd_str):
-                    delta = arrow.get(mod_str) - arrow.get(upd_str)
-                    delta_str = (
-                        f"{delta.days} days ago"
-                        if delta.days
-                        else f"{delta.seconds} seconds ago"
-                    )
-                    logging.info(f"{ss_name} is out of date ({delta_str}). Updating...")
-                    wishlist_ss = await agc.open_by_url(wishlist_url)
-                    await _sync_apply(wishlist_ss, council_ss)
+                    mod_str = wishlist_metadata["modifiedTime"]
+                    upd_str = wishlist_timestamps[i]
+                    ss_name = wishlist_metadata["name"]
+                    if not upd_str:
+                        logging.info(f"{ss_name} has never been updated. Updating...")
+                        wishlist_ss = await agc.open_by_url(wishlist_url)
+                        await _sync_apply(wishlist_ss, council_ss)
+                    elif arrow.get(mod_str) > arrow.get(upd_str):
+                        delta = arrow.get(mod_str) - arrow.get(upd_str)
+                        delta_str = (
+                            f"{delta.days} days ago"
+                            if delta.days
+                            else f"{delta.seconds} seconds ago"
+                        )
+                        logging.info(
+                            f"{ss_name} is out of date ({delta_str}). Updating..."
+                        )
+                        wishlist_ss = await agc.open_by_url(wishlist_url)
+                        await _sync_apply(wishlist_ss, council_ss)
+    except Exception as e:
+        logging.error(
+            f"An error occurred while syncing wishlists. {traceback.format_exc()}"
+        )
 
 
 async def _sync_apply(wishlist_ss, council_ss):
@@ -970,9 +980,32 @@ async def _sync_apply(wishlist_ss, council_ss):
     return
 
 
+@bot.command()
+async def reminder(ctx):
+    try:
+        cal = parsedatetime.Calendar()
+        time_struct, _ = cal.parse(ctx.message.content[9:])
+        target_time = time.mktime(time_struct)
+
+        async def remind_in(when, msg):
+            delay = when - time.mktime(datetime.now().timetuple())
+            await asyncio.sleep(delay)
+            await msg.reply("⏰ This is your reminder for the thing! ⏰")
+
+        # send a message response
+        await ctx.message.reply(
+            f"⏰ I will remind you at <t:{int(target_time)}> (this shows your local time) ⏰"
+        )
+
+        # spin up the reminder
+        await remind_in(target_time, ctx.message)
+    except Exception as e:
+        logging.error(traceback.format_exc())
+
+
 @bot.listen()
 async def on_ready():
-    sync_wishlists.start()
+    # sync_wishlists.start()
     logging.info("Bot is ready!")
 
 
