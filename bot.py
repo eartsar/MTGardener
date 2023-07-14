@@ -141,6 +141,17 @@ async def check_user_is_council_or_dev(ctx):
     return bool(role)
 
 
+async def check_user_can_have_nice_things(ctx):
+    guild = bot.get_guild(MT_SERVER_ID)
+    user = ctx.message.author
+    member = discord.utils.find(lambda m: m.id == user.id, guild.members)
+    role = discord.utils.find(
+        lambda r: r.name in ("Cannot Have Nice Things"),
+        member.roles,
+    )
+    return not bool(role)
+
+
 # Error handler
 @bot.event
 async def on_command_error(ctx, error):
@@ -150,6 +161,7 @@ async def on_command_error(ctx, error):
 
 @bot.command()
 @commands.check(check_channel_is_dm)
+@commands.check(check_user_can_have_nice_things)
 async def suggest(ctx):
     if len(ctx.message.content.split(" ")) < 2:
         return await ctx.send(
@@ -564,6 +576,7 @@ async def alertjobs(ctx):
 
 
 @bot.command()
+@commands.check(check_user_is_council_or_dev)
 @sheets_access
 async def dyna(ctx):
     global REGISTERED_DYNAMIS_ZONE
@@ -981,34 +994,38 @@ async def _sync_apply(wishlist_ss, council_ss):
 
 
 @bot.command()
+@commands.check(check_user_can_have_nice_things)
 async def reminder(ctx):
-    try:
-        cal = parsedatetime.Calendar()
-        mention_index = (
-            len(ctx.message.content)
-            if "@" not in ctx.message.content
-            else ctx.message.content.index("@")
+    regex = re.compile(r"!reminder(?:\s(to .+))?\s((?:in|on|at)[a-zA-Z0-9\s]+)(@.+)?")
+    res = regex.search(ctx.message.content)
+    if not res:
+        return await ctx.message.reply(
+            "Usage: `!reminder [to <reason>] in|on|at <date and/or time> [@person @role ...]`"
         )
-        when_section = ctx.message.content[9:mention_index]
-        time_struct, _ = cal.parse(when_section)
+
+    try:
+        matches = res.groups()
+        when = matches[1]
+
+        cal = parsedatetime.Calendar()
+        time_struct, _ = cal.parse(when)
         target_time = time.mktime(time_struct)
 
         async def remind_in(when, msg, mentions_section):
             delay = when - time.mktime(datetime.now().timetuple())
             await asyncio.sleep(delay)
             await msg.reply(
-                f"⏰ This is your reminder for the thing!{mentions_section} ⏰"
+                f"⏰ {mentions_section}This is your reminder for the thing! ⏰"
             )
 
+        all_mentions = ctx.message.mentions + ctx.message.role_mentions
         mentions_section = (
             ""
-            if not ctx.message.mentions
-            else f" (also pinging {' '.join([_.mention for _ in ctx.message.mentions])})"
+            if not all_mentions
+            else f"{' '.join([_.mention for _ in all_mentions])} - "
         )
         # send a message response
-        await ctx.message.reply(
-            f"⏰ I will remind you at <t:{int(target_time)}> (this shows your local time) ⏰"
-        )
+        await ctx.message.reply(f"⏰ I will remind you at <t:{int(target_time)}> ⏰")
 
         # spin up the reminder
         await remind_in(target_time, ctx.message, mentions_section)
