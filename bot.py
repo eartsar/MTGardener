@@ -984,28 +984,41 @@ async def _sync_apply(wishlist_ss, council_ss):
 async def reminder(ctx):
     try:
         cal = parsedatetime.Calendar()
-        time_struct, _ = cal.parse(ctx.message.content[9:])
+        mention_index = (
+            len(ctx.message.content)
+            if "@" not in ctx.message.content
+            else ctx.message.content.index("@")
+        )
+        when_section = ctx.message.content[9:mention_index]
+        time_struct, _ = cal.parse(when_section)
         target_time = time.mktime(time_struct)
 
-        async def remind_in(when, msg):
+        async def remind_in(when, msg, mentions_section):
             delay = when - time.mktime(datetime.now().timetuple())
             await asyncio.sleep(delay)
-            await msg.reply("⏰ This is your reminder for the thing! ⏰")
+            await msg.reply(
+                f"⏰ This is your reminder for the thing!{mentions_section} ⏰"
+            )
 
+        mentions_section = (
+            ""
+            if not ctx.message.mentions
+            else f" (also pinging {' '.join([_.mention for _ in ctx.message.mentions])})"
+        )
         # send a message response
         await ctx.message.reply(
             f"⏰ I will remind you at <t:{int(target_time)}> (this shows your local time) ⏰"
         )
 
         # spin up the reminder
-        await remind_in(target_time, ctx.message)
+        await remind_in(target_time, ctx.message, mentions_section)
     except Exception as e:
         logging.error(traceback.format_exc())
 
 
 @bot.listen()
 async def on_ready():
-    # sync_wishlists.start()
+    sync_wishlists.start()
     logging.info("Bot is ready!")
 
 
