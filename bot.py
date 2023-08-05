@@ -12,7 +12,6 @@ from datetime import datetime
 import parsedatetime
 import time
 
-import enlighten
 import asyncio
 import gspread_asyncio
 
@@ -32,7 +31,6 @@ config = {}
 with open(args.config, "r") as f:
     config = yaml.safe_load(f)
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -45,17 +43,34 @@ logging.basicConfig(
 )
 
 logging.info("Loading configuration...")
-BOT_TOKEN = config["bot_token"]
-MT_SERVER_ID = config["server_id"]
-FEEDBACK_CHANNEL_ID = config["feedback_channel_id"]
-ATTENDANCE_CHANNEL_ID = config["attendance_channel_id"]
-ALERT_CHANNEL_ID = config["alert_channel_id"]
-ALERT_MESSAGE_ID = config["alert_message_id"]
 
-ROSTER_SHEET_NAME = config["roster_sheet_name"]
-PARTY_SHEET_NAME = config["party_sheet_name"]
-DYNAMIS_WISHLIST_SHEET_NAME = config["dynamis_wishlist_sheet_name"]
-PARTY_COMP_CHANNEL_ID = config["party_comp_channel_id"]
+
+def get_config_param_or_die(config, param):
+    if param not in config:
+        logging.error(
+            f"Required parameter '{param}' is not present in the supplied configuration file."
+        )
+        import sys
+
+        sys.exit(1)
+
+    return config[param]
+
+
+BOT_TOKEN = get_config_param_or_die(config, "bot_token")
+MT_SERVER_ID = get_config_param_or_die(config, "server_id")
+FEEDBACK_CHANNEL_ID = get_config_param_or_die(config, "feedback_channel_id")
+FUTURE_OUTLOOK_ID = get_config_param_or_die(config, "future_outlook_id")
+ALERT_CHANNEL_ID = get_config_param_or_die(config, "alert_channel_id")
+ALERT_MESSAGE_ID = get_config_param_or_die(config, "alert_message_id")
+EVENT_VOICE_CHANNEL_GROUP_ID = get_config_param_or_die(config, "event_channel_group_id")
+
+ROSTER_SHEET_NAME = get_config_param_or_die(config, "roster_sheet_name")
+PARTY_SHEET_NAME = get_config_param_or_die(config, "party_sheet_name")
+DYNAMIS_WISHLIST_SHEET_NAME = get_config_param_or_die(
+    config, "dynamis_wishlist_sheet_name"
+)
+PARTY_COMP_CHANNEL_ID = get_config_param_or_die(config, "party_comp_channel_id")
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -63,7 +78,38 @@ intents.message_content = True
 intents.members = True
 intents.reactions = True
 
-bot = commands.Bot(command_prefix="!", case_insensitive=True, intents=intents)
+
+def get_creds():
+    """Function to be called by the AsyncioGspreadClientManager to renew credentials when they expire"""
+    creds = Credentials.from_service_account_file(GOOGLE_CREDS_JSON)
+    scoped = creds.with_scopes(
+        [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+    )
+    return scoped
+
+
+class MTBot(commands.Bot):
+    def __init__(self, *args, **kwargs):
+        super(MTBot, self).__init__(*args, **kwargs)
+        self.agcm = None
+        self.registered_dynamis_zone = None
+        self.att_tracker = None
+        self.att_tracking_start = None
+        self.att_tracking_message = None
+
+    async def setup_hook(self):
+        """Orchestrate other async code to be on the same loop at startup"""
+        self.agcm = gspread_asyncio.AsyncioGspreadClientManager(
+            get_creds, loop=self.loop
+        )
+        sync_wishlists.start()
+
+
+bot = MTBot(command_prefix="!", case_insensitive=True, intents=intents)
 bot.description = """MT Gardener is Mother Tree's little personal assistant bot.
 
 It does little things to make life a little easier (hopefully) on the folks who wish to use it.
@@ -85,28 +131,11 @@ GOOGLE_SHEETS_URL = config["google_sheets_url"]
 JOB_SHEETS_URL = config["job_sheets_url"]
 COUNCIL_SHEETS_URL = config["council_sheets_url"]
 
-
-def get_creds():
-    creds = Credentials.from_service_account_file(GOOGLE_CREDS_JSON)
-    scoped = creds.with_scopes(
-        [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-    )
-    return scoped
-
-
-agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
-
 PROBOT_ID = int(config["probot_id"])
-
-REGISTERED_DYNAMIS_ZONE = None
 
 
 def shared_max_concurrency():
-    """Modified implementation of MaxConcurrency so that it's a shared lock"""
+    """Modified implementation of MaxConcurrency so that it's a shared lock."""
     con_instance = commands.MaxConcurrency(
         1, per=commands.BucketType.default, wait=True
     )
@@ -121,7 +150,7 @@ def shared_max_concurrency():
     return decorator
 
 
-# Create the shared decorator
+# Create the decorator - any command decorated with this will execute sequentially
 sheets_access = shared_max_concurrency()
 
 
@@ -135,7 +164,8 @@ async def check_user_is_council_or_dev(ctx):
     user = ctx.message.author
     member = discord.utils.find(lambda m: m.id == user.id, guild.members)
     role = discord.utils.find(
-        lambda r: r.name in ("Elder Tree Treants (Council)", "MT Gardener Dev"),
+        lambda r: r.name
+        in ("Elder Tree Treants (Council)", "MT Gardener Dev", "Council Help"),
         member.roles,
     )
     return bool(role)
@@ -157,6 +187,26 @@ async def check_user_can_have_nice_things(ctx):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.errors.CheckFailure):
         pass
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    event_channels = bot.get_channel(EVENT_VOICE_CHANNEL_GROUP_ID).voice_channels
+
+    def entered_event_channel(before, after):
+        return before.channel not in event_channels and after.channel in event_channels
+
+    def exited_event_channel(before, after):
+        return before.channel in event_channels and after.channel not in event_channels
+
+    if bot.att_tracker:
+        if str(member) not in bot.att_tracker:
+            bot.att_tracker[str(member)] = []
+
+        if entered_event_channel(before, after):
+            bot.att_tracker[str(member)].append(arrow.now())
+        elif exited_event_channel(before, after):
+            bot.att_tracker[str(member)].append(arrow.now())
 
 
 @bot.command()
@@ -183,99 +233,40 @@ async def suggest(ctx):
     )
 
 
-async def att_poll_reactions(last_poll_message):
+async def verified_reactions_to_last_outlook():
+    # Get the last posted outlook message
+    channel = bot.get_channel(FUTURE_OUTLOOK_ID)
+    last_outlook_message = None
+    async for message in channel.history(limit=10):
+        if message.author.id == int(PROBOT_ID):
+            last_outlook_message = message
+            break
+
+    if not last_outlook_message:
+        return []
+
     reaction_map = {}
-    for reaction in last_poll_message.reactions:
+    for reaction in last_outlook_message.reactions:
         if type(reaction.emoji) == str:
             continue
         reaction_map[reaction.emoji.name] = []
         async for user in reaction.users():
             if user.id == PROBOT_ID:
                 continue
-            reaction_map[reaction.emoji.name].append(str(user))
+            reaction_map[reaction.emoji.name].append(user)
 
-    return reaction_map
+    can_go = []
+    can_go.extend(reaction_map["verifygreen"] if "verifygreen" in reaction_map else [])
+    can_go.extend(reaction_map["verifypink"] if "verifypink" in reaction_map else [])
+    can_go.extend(reaction_map["verifyteal"] if "verifyteal" in reaction_map else [])
+    return can_go
 
 
-async def get_last_poll_message():
-    channel = discord.utils.get(bot.get_all_channels(), id=ATTENDANCE_CHANNEL_ID)
+async def get_last_outlook_message():
+    channel = bot.get_channel(FUTURE_OUTLOOK_ID)
     async for message in channel.history(limit=10):
         if message.author.id == int(PROBOT_ID):
             return message
-
-
-async def update_att_sheet(last_poll_message):
-    logging.info("Updating poll responses...")
-
-    reaction_map = await att_poll_reactions(last_poll_message)
-    agc = await agcm.authorize()
-    ss = await agc.open_by_url(GOOGLE_SHEETS_URL)
-    ws = await ss.worksheet(ROSTER_SHEET_NAME)
-
-    user_id_col_values = await ws.col_values(2)
-
-    # determine the window of actual user names in the column, we need it to figure out non-responses
-    start_index = user_id_col_values.index("Discord Tag") + 1
-    end_index = user_id_col_values.index("", 6) - 1
-
-    full_roster = set(user_id_col_values[start_index : end_index + 1])
-
-    current_att_col_values = await ws.col_values(23)
-    current_att_col_values.extend(
-        ["" for _ in range(len(user_id_col_values) - len(current_att_col_values))]
-    )
-
-    def get_concat_list_for_keys(reaction_map, keys):
-        ret = []
-        for key in keys:
-            if key not in reaction_map:
-                continue
-            ret.extend(reaction_map[key])
-        return ret
-
-    update_map = {}
-    for user_id in get_concat_list_for_keys(reaction_map, ["attcheck", "attcheck2"]):
-        update_map[user_id] = "o"
-
-    for user_id in get_concat_list_for_keys(
-        reaction_map, ["attearly", "attlate", "attmaybe"]
-    ):
-        update_map[user_id] = "/"
-
-    for user_id in get_concat_list_for_keys(reaction_map, ["attdecline"]):
-        update_map[user_id] = "x"
-
-    for user_id in full_roster - set(update_map.keys()):
-        update_map[user_id] = ""
-
-    # Generate batch-update commands for each user so we don't get rate-limited
-    # Fields that are already the right value no-op and are not added to batch update
-    def add_to_batch(
-        batch_updates, user_id, user_id_col_values, current_att_col_values, val
-    ):
-        try:
-            index = user_id_col_values.index(user_id)
-            current = current_att_col_values[index]
-            if current == val:
-                return
-
-            logging.info(f"Updating att poll response for {user_id}")
-            batch_updates.append({"range": f"W{index + 1}", "values": [[val]]})
-        except Exception as e:
-            logging.info(e)
-
-    batch_updates = []
-    for key in update_map:
-        add_to_batch(
-            batch_updates,
-            key,
-            user_id_col_values,
-            current_att_col_values,
-            update_map[key],
-        )
-
-    await ws.batch_update(batch_updates)
-    logging.info("Att poll updates done.")
 
 
 @bot.command()
@@ -291,137 +282,91 @@ async def job(ctx):
         )
 
 
-async def get_char_names_for_users(users):
-    agc = await agcm.authorize()
+async def get_roster_for_users(users):
+    # Fetch the roster range that contains username, main, and alt name
+    agc = await bot.agcm.authorize()
     council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
     roster_ws = await council_ss.worksheet("Wishlist Submissions")
 
-    logging.info("Mapping discord user to character names...")
+    roster_range = await roster_ws.get_values("A:D")
+    roster = {}
+    for i in range(1, len(roster_range)):
+        row = roster_range[i]
+        roster[row[3]] = {
+            "main": row[0],
+            "alt": row[1] if row[1] else None,
+            "id": row[3],
+            "row_index": i + 1,
+        }
 
-    col_values = await roster_ws.col_values(4)
-    row_indexes = {}
-    for user in users:
-        try:
-            row_indexes[user.id] = col_values.index(str(user))
-        except Exception as e:
-            logging.error(f"{user} signed up for alerts but not on council sheet")
-            row_indexes[user.id] = None
+    # Log which users we wanted from the roster, but aren't present.
+    usernames_not_in_roster = [str(user) for user in users if str(user) not in roster]
+    if usernames_not_in_roster:
+        logging.warning(f"Roster info not present for users: {usernames_not_in_roster}")
 
-    filtered_users = [user for user in users if row_indexes[user.id]]
-    users = filtered_users
-
-    name_map = {}
-    manager = enlighten.get_manager()
-    pbar = manager.counter(
-        total=len(users),
-        desc="Mapping discord users to character names...",
-        unit="users",
-    )
-
-    for user in filtered_users:
-        pbar.update()
-        if not row_indexes[user.id]:
-            continue
-
-        user_row_index = row_indexes[user.id]
-        character_name_cell = await roster_ws.acell(f"A{user_row_index + 1}")
-        character_name = character_name_cell.value
-
-        alt_name = None
-        alt_name_cell = await roster_ws.acell(f"B{user_row_index + 1}")
-        alt_name = alt_name_cell.value if alt_name_cell.value else None
-
-        name_map[user] = {"main": character_name, "alt": alt_name}
-
-    return name_map
+    # Convert the output to be indexable by user object, rather than the ID of the user
+    users_in_roster = [user for user in users if str(user) in roster]
+    return {user: roster[str(user)] for user in users_in_roster}
 
 
 async def _job(users):
     msgs = {}
-    character_names = {}
+    roster = {}
     try:
-        character_names = await get_char_names_for_users(users)
-        logging.info(str(character_names))
+        roster = await get_roster_for_users(users)
     except Exception as e:
         logging.error(f"Something went wrong when trying to get the roster. {e}")
         return msgs
 
-    agc = await agcm.authorize()
+    agc = await bot.agcm.authorize()
     party_ss = await agc.open_by_url(JOB_SHEETS_URL)
     party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
 
     logging.info("Pulling job comp sheet assigned chracters...")
-    col_values = await party_ws.col_values(2)
-    logging.info(col_values)
 
-    manager = enlighten.get_manager()
-    pbar = manager.counter(
-        total=len(users),
-        desc="Checking character assignments...",
-        unit="users",
-    )
-    for user in users:
-        pbar.update()
-        if user not in character_names:
-            logging.info(
-                f"{user} was not found in the roster. Double-check that they are on it."
-            )
-            continue
-        character_name = character_names[user]["main"]
-        alt_name = character_names[user]["alt"]
+    def get_job_assignment(name, job_map):
+        return job_map[name] if (name and name in job_map) else None
 
-        on_sheet = False
-        alt_assigned = False
-        main_assigned = False
-        try:
-            if character_name:
-                row = col_values.index(character_name) + 1
-                job_cell = await party_ws.acell(f"C{row}")
-                job = job_cell.value
-                main_assigned = True
-                on_sheet = True
-        except Exception as e:
-            pass
+    try:
+        job_map = {_[0]: _[1] for _ in await party_ws.get_values("B:C")}
 
-        try:
-            if alt_name:
-                alt_row = col_values.index(alt_name) + 1
-                alt_job_cell = await party_ws.acell(f"C{alt_row}")
-                alt_job = alt_job_cell.value
-                alt_assigned = True
-                on_sheet = True
-        except Exception as e:
-            pass
+        for user in users:
+            if user not in roster:
+                logging.warning(
+                    f"{user} was not found in the roster. Double-check that they are on it."
+                )
+                continue
+            main_name = roster[user]["main"]
+            alt_name = roster[user]["alt"]
 
-        if on_sheet:
-            msg_main = ""
-            msg_sub = ""
-            if main_assigned:
-                msg_main = f"[{character_name}: **{job if job else 'Unspecified'}**] "
-            if alt_assigned:
-                msg_sub = f"[{alt_name}: **{alt_job if alt_job else 'Unspecified'}**]"
+            logging.info(roster[user])
 
-            msgs[user] = f"{user.mention} - {msg_main}{msg_sub}"
-        else:
-            msgs[user] = f"{user.mention} - You're not on the job sheet."
+            main_job = get_job_assignment(roster[user]["main"], job_map)
+            alt_job = get_job_assignment(roster[user]["alt"], job_map)
 
-    logging.info("Done fetching jobs for users.")
-    logging.info(msgs)
-    return msgs
+            if main_job or alt_job:
+                msg = ""
+                if main_job:
+                    msg += (
+                        f"[{main_name}: **{main_job if main_job else 'Unspecified'}**] "
+                    )
+                if alt_job:
+                    msg += f"[{alt_name}: **{alt_job if alt_job else 'Unspecified'}**]"
+
+                msgs[user] = f"{user.mention} - {msg}"
+            else:
+                msgs[user] = f"{user.mention} - You're not on the job sheet."
+
+        logging.info("Done fetching jobs for users.")
+        logging.debug(msgs)
+        return msgs
+    except Exception as e:
+        logging.error(traceback.format_exc())
 
 
 @bot.command()
 async def ping(ctx):
     return await ctx.send("Pong!")
-
-
-@bot.command()
-async def bug(ctx):
-    agc = await agcm.authorize()
-    party_ss = await agc.open_by_url(JOB_SHEETS_URL)
-    party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
-    col_values = await party_ws.col_values(2)
-    print(col_values)
 
 
 @bot.command()
@@ -437,15 +382,6 @@ async def changelog(ctx):
 @commands.check(check_channel_is_dm)
 @commands.check(check_user_is_council_or_dev)
 @sheets_access
-async def attupdate(ctx):
-    last_poll_message = await get_last_poll_message()
-    await update_att_sheet(last_poll_message)
-
-
-@bot.command()
-@commands.check(check_channel_is_dm)
-@commands.check(check_user_is_council_or_dev)
-@sheets_access
 async def publishjobs(ctx):
     msg = await construct_joblist_message()
     party_channel = discord.utils.get(bot.get_all_channels(), id=PARTY_COMP_CHANNEL_ID)
@@ -453,7 +389,7 @@ async def publishjobs(ctx):
 
 
 async def construct_joblist_message():
-    agc = await agcm.authorize()
+    agc = await bot.agcm.authorize()
     party_ss = await agc.open_by_url(JOB_SHEETS_URL)
     party_ws = await party_ss.worksheet(PARTY_SHEET_NAME)
     data = await party_ws.get_all_values()
@@ -503,18 +439,19 @@ async def alertjobs(ctx):
             users.append(user)
 
         logging.info("Cross-referencing latest attendance poll...")
-        update_msg += (
-            "**Done**\n*Checking attendance poll to omit those who can't go...* "
-        )
+        update_msg += "**Done**\n*Filtering out folks on hiatus who didn't sign up...* "
         await message.edit(content=update_msg)
-        last_poll_message = await get_last_poll_message()
-        reaction_map = await att_poll_reactions(last_poll_message)
-        decline_tags = set(
-            reaction_map["attdecline"] if "attdecline" in reaction_map else []
-        )
+        last_outlook_message = await get_last_outlook_message()
+        can_go = set(await verified_reactions_to_last_outlook(last_outlook_message))
 
-        logging.info("Omitting users who declined event: " + ", ".join(decline_tags))
-        users = [_ for _ in users if str(_) not in decline_tags]
+        def is_on_hiatus(user):
+            for role in user.roles:
+                if "hiatus" in role.name.lower():
+                    return True
+            return False
+
+        on_hiatus = set([_ for _ in users if is_on_hiatus(user)])
+        users = [_ for _ in users if _ not in (on_hiatus - can_go)]
 
         update_msg += "**Done**\n*Fetching users' jobs...* "
         await message.edit(content=update_msg)
@@ -579,7 +516,6 @@ async def alertjobs(ctx):
 @commands.check(check_user_is_council_or_dev)
 @sheets_access
 async def dyna(ctx):
-    global REGISTERED_DYNAMIS_ZONE
     try:
         zone_anchors = {
             "bastok": 2,
@@ -605,11 +541,11 @@ async def dyna(ctx):
             if tokens[2].lower() not in zone_anchors:
                 return await ctx.send(invalid_zone_msg)
             else:
-                REGISTERED_DYNAMIS_ZONE = tokens[2].lower()
+                bot.registered_dynamis_zone = tokens[2].lower()
                 return await ctx.send(
-                    f"Current dynamis zone set to: `{REGISTERED_DYNAMIS_ZONE}`"
+                    f"Current dynamis zone set to: `{bot.registered_dynamis_zone}`"
                 )
-        elif not REGISTERED_DYNAMIS_ZONE:
+        elif not bot.registered_dynamis_zone:
             return await ctx.send(invalid_zone_msg)
 
         job = tokens[1]
@@ -643,7 +579,7 @@ async def dyna(ctx):
                 "That is not a valid drop choice. Must be either af (default), -1, or acc."
             )
 
-        agc = await agcm.authorize()
+        agc = await bot.agcm.authorize()
         ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
         ws = await ss.worksheet(DYNAMIS_WISHLIST_SHEET_NAME)
 
@@ -651,12 +587,12 @@ async def dyna(ctx):
         newline = "\n"
         tics = "```"
 
-        choice_one_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 1
-        choice_two_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 2
-        choice_other_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 3
-        choice_minus_one_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 4
-        choice_acc_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 6
-        choice_acc_other_index = zone_anchors[REGISTERED_DYNAMIS_ZONE] + 8
+        choice_one_index = zone_anchors[bot.registered_dynamis_zone] + 1
+        choice_two_index = zone_anchors[bot.registered_dynamis_zone] + 2
+        choice_other_index = zone_anchors[bot.registered_dynamis_zone] + 3
+        choice_minus_one_index = zone_anchors[bot.registered_dynamis_zone] + 4
+        choice_acc_index = zone_anchors[bot.registered_dynamis_zone] + 6
+        choice_acc_other_index = zone_anchors[bot.registered_dynamis_zone] + 8
 
         character_name_values = await ws.col_values(1)
         if choice_type == "af":
@@ -690,7 +626,12 @@ async def dyna(ctx):
 
             await ctx.send(msg)
         else:
-            if REGISTERED_DYNAMIS_ZONE not in ("bubu", "qufim", "valkurm", "tavnazia"):
+            if bot.registered_dynamis_zone not in (
+                "bubu",
+                "qufim",
+                "valkurm",
+                "tavnazia",
+            ):
                 return await ctx.send(
                     "Current dynamis zone must be a dreamlands zone to do that."
                 )
@@ -742,7 +683,7 @@ async def sync(ctx, link=None):
     logging.info("Wishlist request initiated.")
 
     logging.info("Authorizing Google Sheets...")
-    agc = await agcm.authorize()
+    agc = await bot.agcm.authorize()
     council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
 
     async def fetch_wishlist_url(author):
@@ -809,8 +750,12 @@ async def sync_wishlists():
     import google.auth.transport.requests
     import aiohttp
 
+    async def fetch(url, session):
+        async with session.get(url) as resp:
+            return await resp.json()
+
     try:
-        agc = await agcm.authorize()
+        agc = await bot.agcm.authorize()
         request = google.auth.transport.requests.Request()
         agc.gc.auth.refresh(request)
         drive_access_token = "Bearer " + agc.gc.auth.token
@@ -818,17 +763,16 @@ async def sync_wishlists():
         council_ss = await agc.open_by_url(COUNCIL_SHEETS_URL)
         logging.info("Pulling links and timestamps...")
         wishlist_ws = await council_ss.worksheet("Wishlist Submissions")
-        wishlist_timestamps = await wishlist_ws.col_values(3)
-        wishlist_urls = await wishlist_ws.col_values(5)
-        hiatus_markers = await wishlist_ws.col_values(6)
-        logging.info("Comparing update timestamps...")
+        wishlist_rows = await wishlist_ws.get_values("A:F")
+        ss_id_to_timestamps = {}
 
         async with aiohttp.ClientSession(
             headers={"Authorization": drive_access_token}
         ) as session:
-            for i in range(1, len(wishlist_urls)):
-                wishlist_url = wishlist_urls[i]
-                if hiatus_markers[i] == "TRUE":
+            drive_urls = []
+            for i in range(1, len(wishlist_rows)):
+                wishlist_url = wishlist_rows[i][4]
+                if wishlist_rows[i][5] == "TRUE":
                     continue
 
                 if not wishlist_url:
@@ -847,30 +791,46 @@ async def sync_wishlists():
                     logging.error(f"Invalid URL: " + wishlist_url)
                     continue
 
-                async with session.get(
-                    f"https://www.googleapis.com/drive/v3/files/{ss_id}?supportsAllDrives=true&fields=name,modifiedTime"
-                ) as resp:
-                    wishlist_metadata = await resp.json()
+                drive_urls.append(
+                    f"https://www.googleapis.com/drive/v3/files/{ss_id}?supportsAllDrives=true&fields=name,modifiedTime,webViewLink,id"
+                )
+                ss_id_to_timestamps[ss_id] = wishlist_rows[i][2]
 
-                    mod_str = wishlist_metadata["modifiedTime"]
-                    upd_str = wishlist_timestamps[i]
-                    ss_name = wishlist_metadata["name"]
-                    if not upd_str:
-                        logging.info(f"{ss_name} has never been updated. Updating...")
-                        wishlist_ss = await agc.open_by_url(wishlist_url)
-                        await _sync_apply(wishlist_ss, council_ss)
-                    elif arrow.get(mod_str) > arrow.get(upd_str):
-                        delta = arrow.get(mod_str) - arrow.get(upd_str)
-                        delta_str = (
-                            f"{delta.days} days ago"
-                            if delta.days
-                            else f"{delta.seconds} seconds ago"
-                        )
-                        logging.info(
-                            f"{ss_name} is out of date ({delta_str}). Updating..."
-                        )
-                        wishlist_ss = await agc.open_by_url(wishlist_url)
-                        await _sync_apply(wishlist_ss, council_ss)
+            logging.info("Executing parallel requests for wishlist metadata...")
+            tasks = []
+            for drive_url in drive_urls:
+                task = asyncio.ensure_future(fetch(drive_url, session))
+                tasks.append(task)
+
+            responses = await asyncio.gather(*tasks)
+            logging.info("Done. Checking to see which lists need updating...")
+
+            usernames_no_update_needed = []
+            for wishlist_metadata in responses:
+                mod_str = wishlist_metadata["modifiedTime"]
+                upd_str = ss_id_to_timestamps[wishlist_metadata["id"]]
+                web_link = wishlist_metadata["webViewLink"]
+                ss_name = wishlist_metadata["name"]
+                if not upd_str:
+                    logging.info(f"{ss_name} has never been updated. Updating...")
+                    wishlist_ss = await agc.open_by_url(web_link)
+                    await _sync_apply(wishlist_ss, council_ss)
+                elif arrow.get(mod_str) > arrow.get(upd_str):
+                    delta = arrow.now() - arrow.get(mod_str)
+                    delta_str = (
+                        f"{delta.days} days ago"
+                        if delta.days
+                        else f"{delta.seconds} seconds ago"
+                    )
+                    logging.info(f"{ss_name} is out of date ({delta_str}). Updating...")
+                    wishlist_ss = await agc.open_by_url(web_link)
+                    await _sync_apply(wishlist_ss, council_ss)
+                else:
+                    usernames_no_update_needed.append(ss_name)
+
+            logging.info(
+                f"{usernames_no_update_needed} - Up to date, no update needed."
+            )
     except Exception as e:
         logging.error(
             f"An error occurred while syncing wishlists. {traceback.format_exc()}"
@@ -1033,10 +993,74 @@ async def reminder(ctx):
         logging.error(traceback.format_exc())
 
 
+@bot.command()
+async def att(ctx, state, event_name=None):
+    try:
+        event_channels = bot.get_channel(EVENT_VOICE_CHANNEL_GROUP_ID).voice_channels
+        if state == "start":
+            bot.att_tracker = {}
+            bot.att_tracking_start = arrow.now()
+            bot.att_tracking_message = await ctx.message.reply(
+                f"Starting attendance tracking{(' **for ' + event_name + '**') if event_name else ''}."
+            )
+            for event_channel in event_channels:
+                for event_member in event_channel.members:
+                    if str(event_member) not in bot.att_tracker:
+                        bot.att_tracker[str(event_member)] = []
+                    bot.att_tracker[str(event_member)].append(arrow.now())
+
+        elif state == "stop":
+            att_delta = arrow.now() - bot.att_tracking_start
+            bot.att_tracking_start = None
+            for event_channel in event_channels:
+                for event_member in event_channel.members:
+                    if str(event_member) not in bot.att_tracker:
+                        bot.att_tracker[str(event_member)] = []
+                    bot.att_tracker[str(event_member)].append(arrow.now())
+            results = {}
+            for user in bot.att_tracker:
+                timestamps = bot.att_tracker[user]
+                pairs = [
+                    (timestamps[i], timestamps[i - 1])
+                    for i in range(len(timestamps) - 1, 0, -2)
+                ]
+                total = 0
+                for end, start in pairs:
+                    total += (end - start).seconds
+
+                # hacky work-around, if the total time is EXACTLY a half hour increment
+                # add in one second to avoid banker's rounding
+                if total % (60 * 30) == 0:
+                    total += 1
+
+                results[user] = (round(total / (60 * 60)), total / att_delta.seconds)
+
+            discord_users_tracked = [
+                _ for _ in bot.get_guild(MT_SERVER_ID).members if str(_) in results
+            ]
+            roster = await get_roster_for_users(discord_users_tracked)
+            points_lookup = {
+                roster[user]["main"]: results[str(user)][0]
+                for user in discord_users_tracked
+            }
+            await bot.att_tracking_message.reply(
+                f"Stopping attendance tracking. Points: ```{points_lookup}```"
+            )
+            bot.att_tracker = None
+            bot.att_tracking_message = None
+    except Exception as e:
+        logging.error(traceback.format_exc())
+
+
 @bot.listen()
 async def on_ready():
-    sync_wishlists.start()
     logging.info("Bot is ready!")
 
 
-bot.run(BOT_TOKEN)
+async def main():
+    # start the client
+    async with bot:
+        await bot.start(BOT_TOKEN)
+
+
+asyncio.run(main())
