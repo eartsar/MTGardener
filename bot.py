@@ -262,13 +262,6 @@ async def verified_reactions_to_last_outlook():
     return can_go
 
 
-async def get_last_outlook_message():
-    channel = bot.get_channel(FUTURE_OUTLOOK_ID)
-    async for message in channel.history(limit=10):
-        if message.author.id == int(PROBOT_ID):
-            return message
-
-
 @bot.command()
 @commands.check(check_channel_is_dm)
 @sheets_access
@@ -441,8 +434,7 @@ async def alertjobs(ctx):
         logging.info("Cross-referencing latest attendance poll...")
         update_msg += "**Done**\n*Filtering out folks on hiatus who didn't sign up...* "
         await message.edit(content=update_msg)
-        last_outlook_message = await get_last_outlook_message()
-        can_go = set(await verified_reactions_to_last_outlook(last_outlook_message))
+        can_go = set(await verified_reactions_to_last_outlook())
 
         def is_on_hiatus(user):
             for role in user.roles:
