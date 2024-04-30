@@ -193,27 +193,27 @@ SEA_ALT = {
 }
 
 LIMBUS_MAIN = {
-    'SEA!B24': 'D',
-    'SEA!C24': 'E',
-    'SEA!D24': 'F',
-    'SEA!E24': 'G',
-    'SEA!F24': 'H',
-    'SEA!G24': 'I',
-    'SEA!H24': 'J',
-    'SEA!I24': 'K',
-    'SEA!J24': 'L'
+    'SEA!B24': 'B',
+    'SEA!C24': 'C',
+    'SEA!D24': 'D',
+    'SEA!E24': 'E',
+    'SEA!F24': 'F',
+    'SEA!G24': 'G',
+    'SEA!H24': 'H',
+    'SEA!I24': 'I',
+    'SEA!J24': 'J'
 }
 
 LIMBUS_ALT = {
-    'SEA!B25': 'D',
-    'SEA!C25': 'E',
-    'SEA!D25': 'F',
-    'SEA!E25': 'G',
-    'SEA!F25': 'H',
-    'SEA!G25': 'I',
-    'SEA!H25': 'J',
-    'SEA!I25': 'K',
-    'SEA!J25': 'L'
+    'SEA!B25': 'B',
+    'SEA!C25': 'C',
+    'SEA!D25': 'D',
+    'SEA!E25': 'E',
+    'SEA!F25': 'F',
+    'SEA!G25': 'G',
+    'SEA!H25': 'H',
+    'SEA!I25': 'I',
+    'SEA!J25': 'J'
 }
 
 
